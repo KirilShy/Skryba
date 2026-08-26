@@ -1,0 +1,40 @@
+[project]
+name = "skryba"
+version = "0.1.0"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Kirill Shynkarenko" }]
+keywords = ["whisper", "transcription", "mlx", "apple-silicon", "diarization", "meetings"]
+classifiers = [
+    "Environment :: MacOS X",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+description = "Local meeting transcription for Apple Silicon — Whisper on the GPU, speaker labels, AI summaries"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "python-multipart>=0.0.12",
+    "mlx-whisper>=0.4.3",
+    "anthropic>=0.40",
+    "httpx",
+]
+
+[project.optional-dependencies]
+diarize = [
+    "pyannote.audio>=3.3",
+    "torch>=2.4",
+    "torchaudio>=2.4",
+]
+
+[tool.uv]
+package = false
+
+# This is an application, not a library. Without an explicit package list,
+# setuptools sees both `app/` and `data/` as top-level packages and refuses to
+# build ("Multiple top-level packages discovered in a flat-layout").
+[tool.setuptools]
+packages = ["app"]

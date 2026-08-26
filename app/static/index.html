@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skryba</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand">
+      <h1>Skryba</h1>
+      <p id="cap-line">Meeting transcription, local to your Mac</p>
+    </div>
+
+    <div class="dropzone" id="dropzone">
+      <strong>Drop audio here</strong>
+      <span>or click to choose &middot; m4a, mp3, wav, mp4&hellip;</span>
+      <input type="file" id="file-input" multiple hidden
+             accept="audio/*,video/*,.m4a,.mp3,.wav,.mp4,.mov,.aac,.flac,.opus">
+    </div>
+
+    <div class="opts">
+      <div>
+        <label class="opt-label">Model</label>
+        <div class="segmented" id="model-seg" role="tablist"></div>
+      </div>
+
+      <div class="toggle-row" id="row-diarize">
+        <div class="t-text">Speaker labels<small id="diarize-hint">Who said what</small></div>
+        <label class="gr-toggle"><input type="checkbox" id="opt-diarize"><span></span></label>
+      </div>
+
+      <div class="field" id="field-speakers">
+        <label class="opt-label">Number of speakers</label>
+        <input type="number" id="opt-speakers" min="1" max="20" placeholder="auto-detect">
+      </div>
+
+      <div class="toggle-row" id="row-summary">
+        <div class="t-text">AI summary<small id="summary-hint">Decisions &amp; action items</small></div>
+        <label class="gr-toggle"><input type="checkbox" id="opt-summary"><span></span></label>
+      </div>
+
+      <div>
+        <label class="opt-label">Language</label>
+        <input type="text" id="opt-language" placeholder="auto-detect (e.g. en, pl, uk)"
+               style="width:100%;padding:7px 10px;border-radius:9px;border:1px solid var(--border);background:var(--surface-2)">
+      </div>
+    </div>
+
+    <div class="sidebar-scroll">
+      <label class="opt-label">Recordings</label>
+      <div id="job-list"></div>
+    </div>
+  </aside>
+
+  <main class="main" id="main">
+    <div class="empty" id="empty">
+      <div>
+        <p style="font-size:15px;margin:0 0 4px">No recording selected</p>
+        <p style="font-size:13px;margin:0">Drop a meeting recording on the left to get started.</p>
+      </div>
+    </div>
+    <div id="detail" hidden>
+      <div class="topbar">
+        <h2 id="d-title"></h2>
+        <div class="sub" id="d-sub"></div>
+        <audio class="player" id="player" controls preload="metadata"></audio>
+        <div class="tabs">
+          <button id="tab-summary" aria-selected="false">Summary</button>
+          <button id="tab-transcript" aria-selected="true">Transcript</button>
+          <div class="spacer"></div>
+          <div class="exports" id="exports"></div>
+        </div>
+      </div>
+      <div class="content" id="content"></div>
+    </div>
+  </main>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>
