@@ -56,8 +56,8 @@ Measured on an M2 (16 GB), transcribing a 35-minute meeting:
 ## Install
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/skryba.git
-cd skryba
+git clone https://github.com/KirilShy/Skryba.git
+cd Skryba
 uv venv --python 3.13 .venv
 uv pip install --python .venv/bin/python -r pyproject.toml
 ```
