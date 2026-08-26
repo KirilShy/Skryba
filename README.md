@@ -35,6 +35,7 @@ Measured on an M2 (16 GB), transcribing a 35-minute meeting:
 | --- | --- | --- |
 | `faster-whisper`, CPU int8 | ~80 min (projected) | 0.4× realtime |
 | **Skryba** (MLX, `large-v3-turbo`) | **2 min 41 s** | **13× realtime** |
+| Skryba (MLX, `large-v3`) | 6 min 56 s | 5.1× realtime |
 
 ## Features
 
@@ -102,7 +103,7 @@ detects that specific case and tells you, rather than failing obscurely.
 | Model | Speed on M2 | When to use |
 | --- | --- | --- |
 | `turbo` | ~13× realtime | Default. Best accuracy per second. |
-| `large` | ~4× realtime | Hard audio: heavy accents, crosstalk, poor mics. |
+| `large` | ~5× realtime | Hard audio: heavy accents, crosstalk, poor mics. |
 | `medium` / `small` | faster still | Quick drafts, or clean single-speaker audio. |
 
 Setting the language explicitly (`en`, `pl`, `uk`) is both faster and more
