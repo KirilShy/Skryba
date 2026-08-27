@@ -89,8 +89,15 @@ silently.
 
 | Feature | Variable | Where to get it |
 | --- | --- | --- |
-| AI summary | `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com) |
+| AI summary (OpenRouter) | `OPENROUTER_API_KEY` | [openrouter.ai/keys](https://openrouter.ai/keys) |
+| AI summary (Anthropic) | `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com) |
 | Speaker labels | `HF_TOKEN` | [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) |
+
+Either summary backend works; OpenRouter takes precedence when both keys are
+present, and `SUMMARY_PROVIDER=anthropic` forces the other way. Pick the
+OpenRouter model with `OPENROUTER_MODEL` (default `anthropic/claude-sonnet-5`)
+— any model with structured-output support will do. A 35-minute meeting costs
+roughly four cents to summarize.
 
 For speaker labels you must also accept the model terms while signed in, on
 **both** [`pyannote/speaker-diarization-3.1`](https://huggingface.co/pyannote/speaker-diarization-3.1)

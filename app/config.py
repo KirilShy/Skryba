@@ -35,3 +35,10 @@ ALLOWED_SUFFIXES = {
 # so the files are easy to find outside the browser.
 EXPORT_DIR = Path(os.environ.get("EXPORT_DIR", BASE_DIR.parent / "transcripts"))
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+
+# Summary provider. "auto" prefers OpenRouter when its key is present, then the
+# Anthropic API. Set explicitly to "anthropic" or "openrouter" to force one.
+SUMMARY_PROVIDER = os.environ.get("SUMMARY_PROVIDER", "auto").strip().lower()
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+OPENROUTER_BASE_URL = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "anthropic/claude-sonnet-5")

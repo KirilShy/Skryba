@@ -46,7 +46,7 @@ async def capabilities() -> dict:
         "default_model": config.DEFAULT_WHISPER,
         "diarization": diarize.is_available(),
         "summarization": summarize.is_available(),
-        "claude_model": config.CLAUDE_MODEL,
+        "summary_provider": summarize.provider_label(),
     }
 
 

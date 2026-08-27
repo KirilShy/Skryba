@@ -42,7 +42,10 @@ async function loadCaps() {
   wireOptional('diarize', state.caps.diarization,
     'Requires pyannote + HF_TOKEN — see the README');
   wireOptional('summary', state.caps.summarization,
-    'Set ANTHROPIC_API_KEY to enable');
+    'Set OPENROUTER_API_KEY or ANTHROPIC_API_KEY to enable');
+  if (state.caps.summarization && state.caps.summary_provider) {
+    $('summary-hint').textContent = state.caps.summary_provider;
+  }
 
   $('opt-diarize').onchange = (e) =>
     $('field-speakers').classList.toggle('show', e.target.checked);

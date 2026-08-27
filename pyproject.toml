@@ -20,6 +20,7 @@ dependencies = [
     "python-multipart>=0.0.12",
     "mlx-whisper>=0.4.3",
     "anthropic>=0.40",
+    "openai>=1.40",
     "httpx",
 ]
 
