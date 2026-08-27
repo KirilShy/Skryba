@@ -172,6 +172,8 @@ async function select(id) {
   renderJobs();
   $('empty').hidden = true;
   $('detail').hidden = false;
+  $('content').innerHTML = `<div class="loading">
+    <span class="spinner"></span>Loading transcript…</div>`;
 
   const job = await (await fetch(`/api/jobs/${id}`)).json();
   state.active = job;
@@ -228,7 +230,7 @@ function renderDetail() {
   renderSub();
 
   // transport controls for a job that is still in flight
-  const c = $('controls');
+  const c = $('controls') || { };
   if (job.status === 'running' || job.status === 'queued') {
     c.innerHTML = `<button class="btn" id="btn-pause">Pause</button>
                    <button class="btn" id="btn-cancel">Cancel</button>`;
@@ -472,6 +474,17 @@ $('player').addEventListener('timeupdate', () => {
     el.classList.toggle('playing',
       t >= parseFloat(el.dataset.start) && t < parseFloat(el.dataset.end));
   }
+});
+
+// A thrown error used to leave the page blank with no clue why. Surfacing it
+// costs nothing and turns "is it loading or broken?" into an answer.
+window.addEventListener('error', (e) => {
+  const c = document.getElementById('content');
+  if (!c) return;
+  c.innerHTML = `<div class="notice err"><strong>Something broke in the page.</strong>
+    <div style="margin-top:6px;font-family:ui-monospace,monospace;font-size:12px">
+    ${String(e.message || e.error || 'Unknown error').replace(/[<>&]/g, '')}</div>
+    <div style="margin-top:6px">Reload to try again.</div></div>`;
 });
 
 // ---------- theme ----------
