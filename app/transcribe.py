@@ -107,7 +107,13 @@ def transcribe_window(
         "condition_on_previous_text": False,
         "compression_ratio_threshold": 2.4,
         "no_speech_threshold": 0.6,
+        # Word timestamps are what let Whisper locate, and then discard, text it
+        # invented over a silent stretch.
+        "word_timestamps": True,
+        "hallucination_silence_threshold": config.HALLUCINATION_SILENCE_SECONDS,
     }
+    if config.INITIAL_PROMPT:
+        kwargs["initial_prompt"] = config.INITIAL_PROMPT
     if language:
         kwargs["language"] = language
 

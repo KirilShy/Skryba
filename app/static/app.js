@@ -191,7 +191,15 @@ function listen(id) {
 
     if (msg.type === 'segment') {
       state.liveSegments.push(msg.segment);
-      if (state.tab === 'transcript') renderContent();
+      if (state.tab === 'transcript') {
+        const main = $('main');
+        // Only auto-scroll if the user is already near the bottom — otherwise
+        // they are reading something further up and we must not yank them away.
+        const nearBottom =
+          main.scrollHeight - main.scrollTop - main.clientHeight < 120;
+        renderContent();
+        if (nearBottom) main.scrollTop = main.scrollHeight;
+      }
     } else if (msg.type === 'progress') {
       Object.assign(state.active, { progress: msg.progress, stage: msg.stage });
       const j = state.jobs.find((x) => x.id === id);
@@ -300,7 +308,14 @@ function renderContent() {
   if (state.tab === 'summary') {
     out.push(renderSummary(job));
   } else {
-    const segments = job.segments?.length ? job.segments : state.liveSegments;
+    // Persisted segments and the live stream have to be MERGED, not chosen
+    // between: once the first chunk lands, job.segments is non-empty, and
+    // preferring it would freeze the live text for the rest of a long job.
+    // Live segments at or before the last persisted end are already saved.
+    const persisted = job.segments || [];
+    const lastEnd = persisted.length ? persisted[persisted.length - 1].end : 0;
+    const live = state.liveSegments.filter((s) => s.start >= lastEnd - 0.01);
+    const segments = persisted.concat(live);
     if (job.status === 'paused' && job.chunks?.length) {
       out.push(`<div class="notice">Paused after ${job.next_chunk} of ${job.chunks.length}
         parts. The text below is what finished; Resume continues from there.</div>`);
@@ -379,14 +394,22 @@ function renderTranscript(segments, status) {
       turns.push({ speaker: who, start: seg.start, end: seg.end, text: seg.text });
     }
   }
-  return turns.map((t) => {
+  const html = turns.map((t, i) => {
     const cls = t.speaker ? `sp${speakers.indexOf(t.speaker) % 6}` : '';
     const who = t.speaker ? `<div class="who ${cls}">${esc(t.speaker)}</div>` : '';
-    return `<div class="turn" data-start="${t.start}" data-end="${t.end}">
+    // Mark the newest turn while a job streams, so it is obvious that text is
+    // still arriving rather than the view having stalled.
+    const live = status === 'running' && i === turns.length - 1 ? ' is-live' : '';
+    return `<div class="turn${live}" data-start="${t.start}" data-end="${t.end}">
       <button class="stamp" data-t="${t.start}">${clock(t.start)}</button>
       <div class="body">${who}<div>${esc(t.text)}</div></div>
     </div>`;
   }).join('');
+
+  const tail = status === 'running'
+    ? '<p class="live-note"><span class="live-dot"></span>Transcribing…</p>'
+    : '';
+  return `<div class="transcript">${html}${tail}</div>`;
 }
 
 async function control(action, busyLabel) {
@@ -451,7 +474,30 @@ $('player').addEventListener('timeupdate', () => {
   }
 });
 
+// ---------- theme ----------
+// Three states: explicit light, explicit dark, or follow the system. Only the
+// explicit ones stamp data-theme; "system" removes it so the media query rules.
+function applyTheme(choice) {
+  const root = document.documentElement;
+  if (choice === 'light' || choice === 'dark') root.setAttribute('data-theme', choice);
+  else root.removeAttribute('data-theme');
+  document.querySelectorAll('[data-theme-set]').forEach((b) => {
+    b.setAttribute('aria-pressed', String(b.dataset.themeSet === choice));
+  });
+  try { localStorage.setItem('skryba.theme', choice); } catch { /* private mode */ }
+}
+
+function wireTheme() {
+  let saved = 'system';
+  try { saved = localStorage.getItem('skryba.theme') || 'system'; } catch { /* ignore */ }
+  applyTheme(saved);
+  document.querySelectorAll('[data-theme-set]').forEach((b) => {
+    b.onclick = () => applyTheme(b.dataset.themeSet);
+  });
+}
+
 (async function init() {
+  wireTheme();
   await loadCaps();
   wireUpload();
   await refreshJobs();

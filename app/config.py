@@ -42,3 +42,17 @@ SUMMARY_PROVIDER = os.environ.get("SUMMARY_PROVIDER", "auto").strip().lower()
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 OPENROUTER_BASE_URL = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "anthropic/claude-sonnet-5")
+
+# NOTE: mlx-whisper raises "Beam search decoder is not yet implemented", so
+# beam search is unavailable on this backend regardless of what we ask for.
+# Decoding stays greedy with Whisper's temperature-fallback schedule.
+
+# Whisper's own hallucination suppression: when a stretch is silent for longer
+# than this, discard text generated over it. Requires word timestamps.
+HALLUCINATION_SILENCE_SECONDS = float(
+    os.environ.get("HALLUCINATION_SILENCE_SECONDS", "2.0")
+)
+
+# Seeded into the decoder as context so proper nouns and jargon are recognised
+# rather than guessed at phonetically. Override per install.
+INITIAL_PROMPT = os.environ.get("INITIAL_PROMPT", "").strip() or None

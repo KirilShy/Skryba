@@ -45,11 +45,28 @@ def to_wav16k(src: Path, dst: Path) -> Path:
     when we run transcription and diarization over it.
     """
     dst.parent.mkdir(parents=True, exist_ok=True)
+
+    # Clean up the signal before Whisper ever sees it. Meeting recordings from a
+    # table mic swing between loud and near-inaudible — one file measured 0.002
+    # RMS in places — and Whisper transcribes quiet speech badly or invents
+    # filler over it. In order: drop sub-80Hz rumble (HVAC, desk bumps), even
+    # out the dynamics so a distant speaker is as loud as a close one, then
+    # normalise to broadcast loudness.
+    filters = "highpass=f=80,dynaudnorm=f=200:g=15:p=0.9:m=10,loudnorm=I=-16:TP=-1.5:LRA=11"
     proc = subprocess.run(
         ["ffmpeg", "-nostdin", "-y", "-i", str(src),
-         "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(dst)],
+         "-vn", "-af", filters, "-ac", "1", "-ar", "16000",
+         "-c:a", "pcm_s16le", str(dst)],
         capture_output=True, text=True,
     )
+    if proc.returncode != 0:
+        # Filtering is an enhancement, never a hard requirement — fall back to a
+        # plain decode so an odd input still transcribes.
+        proc = subprocess.run(
+            ["ffmpeg", "-nostdin", "-y", "-i", str(src),
+             "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(dst)],
+            capture_output=True, text=True,
+        )
     if proc.returncode != 0 or not dst.exists():
         raise AudioError(f"ffmpeg failed on {src.name}: {proc.stderr.strip()[-600:]}")
     return dst

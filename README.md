@@ -119,6 +119,26 @@ accurate than auto-detect when you already know it.
 Transcript quality tracks microphone quality far more than model size. A table
 mic in a reverberant room hurts more than dropping from `large` to `turbo`.
 
+### Getting better transcripts
+
+Audio is normalised before Whisper sees it — a high-pass to drop rumble, then
+dynamic normalisation and loudness levelling. On one test recording a passage
+measured 0.004 RMS; the old pipeline returned a single hallucinated line for
+those 30 seconds, while the processed audio produced six segments of real
+speech. This is on by default and is the largest single quality lever.
+
+Two more worth setting in `.env`:
+
+- `INITIAL_PROMPT` — seed recurring names and jargon so they are recognised
+  rather than guessed at phonetically.
+- Pin the language rather than relying on auto-detect. Detection samples the
+  audio, and on a quiet or silence-heavy recording it can land on the wrong
+  answer; one 73-minute Polish meeting was detected as English.
+
+Note that `mlx-whisper` has no beam search decoder, so decoding is greedy with
+Whisper's temperature-fallback schedule. Word timestamps are enabled to drive
+Whisper's own hallucination suppression, which costs roughly 20% throughput.
+
 ## Layout
 
 ```
