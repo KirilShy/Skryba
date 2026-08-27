@@ -39,6 +39,9 @@ class Job:
     finished_at: float | None = None
     options: dict = field(default_factory=dict)
     meta: dict = field(default_factory=dict)
+    chunks: list = field(default_factory=list)   # [{"start","end"}] of the audio
+    next_chunk: int = 0                          # first chunk not yet transcribed
+    control: str = "run"                         # run | pause | cancel
     segments: list = field(default_factory=list)
     summary: dict | None = None
 
@@ -75,11 +78,17 @@ class JobStore:
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
                 job = Job(**data)
-                # Anything mid-flight when the server died is not coming back.
+                # A job cut short mid-flight is resumable: its finished chunks
+                # are already on disk, so park it as paused rather than failed.
                 if job.status in ("running", "queued"):
-                    job.status = "error"
-                    job.error = "Interrupted — the server restarted while this job was running."
-                    job.stage = "done"
+                    if job.chunks and job.next_chunk > 0:
+                        job.status = "paused"
+                        job.control = "pause"
+                        job.message = "Paused — the server restarted."
+                    else:
+                        job.status = "error"
+                        job.error = "Interrupted before any audio was transcribed."
+                        job.stage = "done"
                 self._jobs[job.id] = job
             except Exception:
                 continue
@@ -132,6 +141,54 @@ class JobStore:
     def list(self) -> list[dict]:
         jobs = sorted(self._jobs.values(), key=lambda j: j.created_at, reverse=True)
         return [j.public(include_segments=False) for j in jobs]
+
+    def pause(self, job_id: str) -> bool:
+        job = self._jobs.get(job_id)
+        if not job or job.status not in ("running", "queued"):
+            return False
+        job.control = "pause"
+        self._update(job, message="Finishing the current chunk…")
+        return True
+
+    def resume(self, job_id: str) -> bool:
+        job = self._jobs.get(job_id)
+        if not job or job.status != "paused":
+            return False
+        job.control = "run"
+        self._update(job, status="queued", message="Resuming…")
+        self._queue.put(job.id)
+        return True
+
+    def cancel(self, job_id: str) -> bool:
+        job = self._jobs.get(job_id)
+        if not job or job.status not in ("running", "queued", "paused"):
+            return False
+        job.control = "cancel"
+        if job.status == "paused":
+            # Nothing is executing, so retire it here rather than in the worker.
+            self._update(job, status="canceled", stage="done",
+                         message="Canceled", finished_at=time.time())
+        else:
+            self._update(job, message="Cancelling…")
+        return True
+
+    def retry(self, job_id: str) -> bool:
+        """Re-queue a failed or canceled job, keeping any chunks it finished."""
+        job = self._jobs.get(job_id)
+        if not job or job.status not in ("error", "canceled"):
+            return False
+        if not Path(job.source_path).exists():
+            return False
+        job.control = "run"
+        job.error = None
+        job.finished_at = None
+        if not job.chunks or job.next_chunk == 0:
+            job.segments = []
+            job.next_chunk = 0
+            job.progress = 0.0
+        self._update(job, status="queued", stage="queued", message="Queued…")
+        self._queue.put(job.id)
+        return True
 
     def delete(self, job_id: str) -> bool:
         with self._lock:
@@ -190,6 +247,16 @@ class JobStore:
                 continue
             try:
                 self._process(job)
+            except self._Paused:
+                done = job.next_chunk
+                total = len(job.chunks) or 1
+                self._update(job, status="paused",
+                             message=f"Paused after chunk {done} of {total}")
+                continue
+            except self._Canceled:
+                self._update(job, status="canceled", stage="done",
+                             message="Canceled", finished_at=time.time())
+                continue
             except Exception as exc:
                 traceback.print_exc()
                 self._update(
@@ -200,49 +267,132 @@ class JobStore:
                     finished_at=time.time(),
                 )
 
+    class _Paused(Exception):
+        """Raised to unwind out of the pipeline when the user hits pause."""
+
+    def _check_control(self, job: Job) -> None:
+        if job.control == "pause":
+            raise self._Paused()
+        if job.control == "cancel":
+            raise self._Canceled()
+
+    class _Canceled(Exception):
+        """Raised to unwind out of the pipeline when the user cancels."""
+
     def _process(self, job: Job) -> None:
         source = Path(job.source_path)
-        self._update(job, status="running", stage="prepare",
-                     started_at=time.time(), message="Decoding audio…")
+        resuming = job.next_chunk > 0
 
-        info = audio.probe(source)
-        if not info["has_audio"]:
-            raise audio.AudioError(f"{job.filename} contains no audio track.")
-        duration = info["duration"]
-        job.meta = {
-            "title": Path(job.filename).stem,
-            "duration": duration,
-            "recorded_at": time.strftime("%Y-%m-%d %H:%M",
-                                         time.localtime(source.stat().st_mtime)),
-        }
+        self._update(job, status="running",
+                     stage="transcribe" if resuming else "prepare",
+                     started_at=job.started_at or time.time(),
+                     message="Resuming…" if resuming else "Decoding audio…")
 
         wav_path = config.UPLOAD_DIR / f"{job.id}.wav"
-        audio.to_wav16k(source, wav_path)
-        self._stage_progress(job, "prepare", 1.0)
 
-        # ---- transcribe ----
+        # Preparation is idempotent so a resumed job can rebuild what it needs.
+        if not resuming or not job.chunks or not wav_path.exists():
+            info = audio.probe(source)
+            if not info["has_audio"]:
+                raise audio.AudioError(f"{job.filename} contains no audio track.")
+            duration = info["duration"]
+            job.meta.setdefault("title", Path(job.filename).stem)
+            job.meta["duration"] = duration
+            job.meta.setdefault(
+                "recorded_at",
+                time.strftime("%Y-%m-%d %H:%M", time.localtime(source.stat().st_mtime)),
+            )
+            if not wav_path.exists():
+                audio.to_wav16k(source, wav_path)
+            if not job.chunks:
+                job.chunks = audio.plan_chunks(wav_path, duration)
+            if "silences" not in job.meta:
+                # Cached so a resumed job does not re-scan the whole file.
+                job.meta["silences"] = [
+                    list(r) for r in audio.silence_regions(wav_path)
+                ]
+            self._stage_progress(job, "prepare", 1.0)
+
+        duration = job.meta.get("duration") or 0.0
+        self._check_control(job)
+
+        # ---- transcribe, one resumable chunk at a time ----
         self._update(job, stage="transcribe", message="Transcribing on the GPU…")
+        samples = transcribe.load_audio(wav_path)
 
-        def on_segment(segment: dict, fraction: float) -> None:
-            self._stage_progress(job, "transcribe", fraction)
-            self._emit(job.id, {"type": "segment", "segment": segment})
+        # Resolve the language ONCE, from the loudest parts of the recording.
+        # Detecting per chunk lets a silent stretch relabel the meeting; taking
+        # it from chunk one is worse still, since recordings often open quiet.
+        pinned = (job.options.get("language") or "").strip()
+        language = pinned or job.meta.get("language")
+        if not language:
+            self._update(job, message="Detecting language…")
+            language = transcribe.detect_language(
+                samples, job.options.get("model", config.DEFAULT_WHISPER)
+            )
+            job.meta["language"] = language
+            job.meta["language_source"] = "detected"
+        elif pinned:
+            job.meta["language"] = pinned
+            job.meta["language_source"] = "pinned"
 
-        result = transcribe.transcribe(
-            wav_path,
-            duration=duration,
-            model_key=job.options.get("model", config.DEFAULT_WHISPER),
-            language=job.options.get("language") or None,
-            on_segment=on_segment,
-        )
-        job.segments = result["segments"]
-        job.meta["language"] = result.get("language")
+        silences = [tuple(r) for r in job.meta.get("silences", [])]
+
+        for index in range(job.next_chunk, len(job.chunks)):
+            self._check_control(job)
+            chunk = job.chunks[index]
+
+            # Whisper hallucinates stock phrases ("Thank you.", "Dziękuję.")
+            # over silence. Skipping near-silent windows removes that noise and
+            # costs nothing, since there is no speech there to lose.
+            if audio.speech_fraction(chunk["start"], chunk["end"], silences) < 0.05:
+                job.next_chunk = index + 1
+                self._persist(job)
+                self._stage_progress(job, "transcribe", chunk["end"] / max(duration, 1e-6))
+                continue
+
+            a = int(chunk["start"] * transcribe.SAMPLE_RATE)
+            b = int(chunk["end"] * transcribe.SAMPLE_RATE)
+
+            def on_segment(segment: dict, fraction: float, _c=chunk) -> None:
+                done = _c["start"] + (_c["end"] - _c["start"]) * fraction
+                self._stage_progress(job, "transcribe", min(done / max(duration, 1e-6), 1.0))
+                self._emit(job.id, {"type": "segment", "segment": {
+                    "start": segment["start"] + _c["start"],
+                    "end": segment["end"] + _c["start"],
+                    "text": segment["text"],
+                }})
+
+            result = transcribe.transcribe_window(
+                samples[a:b],
+                offset=chunk["start"],
+                model_key=job.options.get("model", config.DEFAULT_WHISPER),
+                language=language,
+                on_segment=on_segment,
+            )
+            # Whisper repeats a stock phrase over quiet stretches ("Cześć!
+            # Cześć! Cześć!"). Genuine speech almost never repeats the same
+            # short line back to back, so collapsing consecutive duplicates
+            # removes the artifact without touching distinct content. Done here
+            # rather than per window so it also spans chunk boundaries.
+            for seg in result["segments"]:
+                previous = job.segments[-1] if job.segments else None
+                if previous and previous["text"].strip().casefold() == seg["text"].strip().casefold():
+                    previous["end"] = seg["end"]
+                    continue
+                job.segments.append(seg)
+            job.next_chunk = index + 1
+            # Persist per chunk — this is what makes pause and restart survivable.
+            self._persist(job)
+            self._stage_progress(job, "transcribe", chunk["end"] / max(duration, 1e-6))
+
         self._stage_progress(job, "transcribe", 1.0)
-
         if not job.segments:
             raise RuntimeError("Whisper found no speech in this recording.")
 
         # ---- diarize (optional, non-fatal) ----
         if job.options.get("diarize"):
+            self._check_control(job)
             self._update(job, stage="diarize", message="Identifying speakers…")
             try:
                 turns = diarize.diarize(
@@ -254,7 +404,6 @@ class JobStore:
                 names = diarize.prettify_labels(job.segments)
                 job.meta["speakers"] = len(names)
             except diarize.DiarizationUnavailable as exc:
-                # Losing speaker labels should never cost you the transcript.
                 job.meta["diarization_error"] = str(exc)
             except Exception as exc:
                 job.meta["diarization_error"] = f"Diarization failed: {exc}"
@@ -262,7 +411,8 @@ class JobStore:
 
         # ---- summarize (optional, non-fatal) ----
         if job.options.get("summarize"):
-            self._update(job, stage="summarize", message="Summarizing with Claude…")
+            self._check_control(job)
+            self._update(job, stage="summarize", message="Summarizing…")
             try:
                 job.summary = summarize.summarize(job.segments, job.meta)
             except summarize.SummaryUnavailable as exc:
@@ -271,7 +421,7 @@ class JobStore:
                 job.meta["summary_error"] = f"Summarization failed: {exc}"
             self._stage_progress(job, "summarize", 1.0)
 
-        wav_path.unlink(missing_ok=True)  # the 16k wav is a derivative; the original stays
+        wav_path.unlink(missing_ok=True)  # derived file; the original upload stays
         self._update(job, status="done", stage="done", progress=1.0,
                      message="Done", finished_at=time.time())
         self._emit(job.id, {"type": "done", "job": job.public()})

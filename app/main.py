@@ -112,6 +112,43 @@ async def get_job(job_id: str) -> dict:
     return job.public()
 
 
+@app.post("/api/jobs/{job_id}/pause")
+async def pause_job(job_id: str) -> dict:
+    """Stop after the current chunk. Finished chunks are already persisted."""
+    if not store.get(job_id):
+        raise HTTPException(404, "No such job.")
+    if not store.pause(job_id):
+        raise HTTPException(400, "This job is not running.")
+    return {"paused": job_id}
+
+
+@app.post("/api/jobs/{job_id}/resume")
+async def resume_job(job_id: str) -> dict:
+    if not store.get(job_id):
+        raise HTTPException(404, "No such job.")
+    if not store.resume(job_id):
+        raise HTTPException(400, "This job is not paused.")
+    return {"resumed": job_id}
+
+
+@app.post("/api/jobs/{job_id}/retry")
+async def retry_job(job_id: str) -> dict:
+    if not store.get(job_id):
+        raise HTTPException(404, "No such job.")
+    if not store.retry(job_id):
+        raise HTTPException(400, "This job cannot be retried — check the source file still exists.")
+    return {"retrying": job_id}
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str) -> dict:
+    if not store.get(job_id):
+        raise HTTPException(404, "No such job.")
+    if not store.cancel(job_id):
+        raise HTTPException(400, "This job cannot be canceled.")
+    return {"canceled": job_id}
+
+
 @app.delete("/api/jobs/{job_id}")
 async def delete_job(job_id: str) -> dict:
     if not store.delete(job_id):

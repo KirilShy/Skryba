@@ -69,28 +69,41 @@ class _ProgressTap(io.TextIOBase):
         return
 
 
-def transcribe(
-    wav_path: Path,
-    duration: float,
+SAMPLE_RATE = 16000
+
+
+def load_audio(wav_path: Path):
+    """Decode the whole file to a float32 array once, so windows are cheap slices."""
+    from mlx_whisper.audio import load_audio as _load
+
+    return _load(str(wav_path), SAMPLE_RATE)
+
+
+def transcribe_window(
+    samples,
+    offset: float,
     model_key: str = config.DEFAULT_WHISPER,
     language: str | None = None,
     on_segment: Callable[[dict, float], None] | None = None,
 ) -> dict:
-    """Run Whisper and return {'segments': [...], 'language': str, 'text': str}.
+    """Transcribe one slice of audio.
 
-    `language=None` lets Whisper auto-detect. Passing an explicit language is
-    both faster and more accurate when you already know it.
+    `samples` is the slice; `offset` is where it starts in the full recording,
+    used to shift the returned timestamps back into absolute time. Progress
+    reported to `on_segment` is a 0..1 fraction *within this window*.
     """
-    import mlx_whisper  # imported lazily: loading MLX costs ~2s
+    import mlx_whisper
 
     repo = config.WHISPER_MODELS.get(model_key, model_key)
-    tap = _ProgressTap(duration, on_segment) if on_segment else None
+    window_seconds = max(len(samples) / SAMPLE_RATE, 1e-6)
+    tap = _ProgressTap(window_seconds, on_segment) if on_segment else None
 
     kwargs = {
         "path_or_hf_repo": repo,
         "verbose": bool(on_segment),
         # Whisper's known failure mode is looping on silence; these are the
-        # standard guards from the reference implementation.
+        # standard guards. Disabling previous-text conditioning also means
+        # window boundaries cost us almost no accuracy.
         "condition_on_previous_text": False,
         "compression_ratio_threshold": 2.4,
         "no_speech_threshold": 0.6,
@@ -100,22 +113,68 @@ def transcribe(
 
     if tap is not None:
         with contextlib.redirect_stdout(tap):
-            result = mlx_whisper.transcribe(str(wav_path), **kwargs)
+            result = mlx_whisper.transcribe(samples, **kwargs)
     else:
-        result = mlx_whisper.transcribe(str(wav_path), **kwargs)
+        result = mlx_whisper.transcribe(samples, **kwargs)
 
-    segments = [
-        {
-            "start": float(s["start"]),
-            "end": float(s["end"]),
-            "text": (s.get("text") or "").strip(),
+    # Whisper pads its final 30s window with silence and will happily emit
+    # segments inside that padding, past the end of the real audio. Over a whole
+    # file that just overshoots the ending; across chunks it makes every
+    # boundary overlap the next chunk and duplicate the speech there. Drop
+    # anything starting past the window and clamp anything spilling over it.
+    segments = []
+    for seg in result.get("segments", []):
+        text = (seg.get("text") or "").strip()
+        if not text:
+            continue
+        start = float(seg["start"])
+        end = min(float(seg["end"]), window_seconds)
+        if start >= window_seconds - 0.05 or end <= start:
+            continue
+        segments.append({
+            "start": start + offset,
+            "end": end + offset,
+            "text": text,
             "speaker": None,
-        }
-        for s in result.get("segments", [])
-        if (s.get("text") or "").strip()
-    ]
-    return {
-        "segments": segments,
-        "language": result.get("language"),
-        "text": (result.get("text") or "").strip(),
-    }
+        })
+    return {"segments": segments, "language": result.get("language")}
+
+
+def detect_language(samples, model_key: str = config.DEFAULT_WHISPER,
+                    probes: int = 5) -> str | None:
+    """Guess the language from the loudest windows, by majority vote.
+
+    Detecting from the start of a file is unreliable: recordings often open with
+    silence or throat-clearing, and Whisper will confidently label that as any
+    language at all. Sampling the parts with the most energy, and taking a vote,
+    is far more stable on real meeting audio.
+    """
+    import numpy as np
+    import mlx_whisper
+
+    window = 30 * SAMPLE_RATE
+    if len(samples) <= window:
+        candidates = [0]
+    else:
+        # Rank non-overlapping windows by RMS and probe the loudest handful.
+        starts = list(range(0, len(samples) - window, window))
+        energies = [(float(np.sqrt((samples[s:s + window] ** 2).mean())), s) for s in starts]
+        energies.sort(reverse=True)
+        candidates = [s for _, s in energies[:probes]]
+
+    repo = config.WHISPER_MODELS.get(model_key, model_key)
+    votes: dict[str, int] = {}
+    for start in candidates:
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                result = mlx_whisper.transcribe(
+                    samples[start:start + window], path_or_hf_repo=repo, verbose=False
+                )
+        except Exception:
+            continue
+        lang = result.get("language")
+        if lang:
+            votes[lang] = votes.get(lang, 0) + 1
+    if not votes:
+        return None
+    return max(votes.items(), key=lambda kv: kv[1])[0]

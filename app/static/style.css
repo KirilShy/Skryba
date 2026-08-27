@@ -140,6 +140,8 @@ a { color: var(--accent); }
 .dot.running { background: var(--accent); animation: pulse 1.2s infinite; }
 .dot.done { background: var(--ok); }
 .dot.error { background: var(--err); }
+.dot.paused { background: var(--warn); }
+.dot.canceled { background: var(--text-dim); }
 @keyframes pulse { 50% { opacity: .3; } }
 
 .bar { height: 3px; background: var(--surface-2); border-radius: 999px; margin-top: 7px; overflow: hidden; }

@@ -12,6 +12,25 @@ const state = {
   model: 'turbo',
 };
 
+/* Upload settings persist per browser: most people transcribe the same
+   language and model every time, and retyping it each upload is friction.
+   Storage can throw in private windows, so every access is guarded. */
+const PREFS_KEY = 'skryba.prefs';
+function loadPrefs() {
+  try { return JSON.parse(localStorage.getItem(PREFS_KEY)) || {}; } catch { return {}; }
+}
+function savePrefs() {
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify({
+      model: state.model,
+      language: $('opt-language').value.trim(),
+      diarize: $('opt-diarize').checked,
+      summarize: $('opt-summary').checked,
+      speakers: $('opt-speakers').value.trim(),
+    }));
+  } catch { /* private window, or storage disabled — not worth surfacing */ }
+}
+
 const clock = (s) => {
   s = Math.max(0, Math.floor(s || 0));
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
@@ -37,6 +56,7 @@ async function loadCaps() {
     state.model = btn.dataset.model;
     [...$('model-seg').children].forEach((b) =>
       b.setAttribute('aria-selected', String(b === btn)));
+    savePrefs();
   };
 
   wireOptional('diarize', state.caps.diarization,
@@ -47,8 +67,24 @@ async function loadCaps() {
     $('summary-hint').textContent = state.caps.summary_provider;
   }
 
-  $('opt-diarize').onchange = (e) =>
+  const prefs = loadPrefs();
+  if (prefs.model && state.caps.models.includes(prefs.model)) state.model = prefs.model;
+  if (prefs.language) $('opt-language').value = prefs.language;
+  if (prefs.speakers) $('opt-speakers').value = prefs.speakers;
+  // Only restore a toggle the backend can actually honour right now.
+  if (prefs.diarize && state.caps.diarization) $('opt-diarize').checked = true;
+  if (prefs.summarize && state.caps.summarization) $('opt-summary').checked = true;
+  $('field-speakers').classList.toggle('show', $('opt-diarize').checked);
+  [...$('model-seg').children].forEach((b) =>
+    b.setAttribute('aria-selected', String(b.dataset.model === state.model)));
+
+  $('opt-diarize').onchange = (e) => {
     $('field-speakers').classList.toggle('show', e.target.checked);
+    savePrefs();
+  };
+  ['opt-summary', 'opt-language', 'opt-speakers'].forEach((id) => {
+    $(id).addEventListener('change', savePrefs);
+  });
 }
 
 function wireOptional(key, available, disabledHint) {
@@ -111,6 +147,8 @@ function renderJobs() {
     const stage = { prepare: 'Decoding', transcribe: 'Transcribing',
                     diarize: 'Speakers', summarize: 'Summarizing' }[j.stage] || j.stage;
     const line = running ? `${stage} ${pct}%`
+      : j.status === 'paused' ? `Paused ${pct}%`
+      : j.status === 'canceled' ? 'Canceled'
       : j.status === 'error' ? 'Failed'
       : j.meta?.duration ? clock(j.meta.duration) : 'Queued';
     return `<div class="job ${j.id === state.activeId ? 'active' : ''}" data-id="${j.id}">
@@ -181,6 +219,27 @@ function renderDetail() {
   $('d-title').textContent = job.meta?.title || job.filename;
   renderSub();
 
+  // transport controls for a job that is still in flight
+  const c = $('controls');
+  if (job.status === 'running' || job.status === 'queued') {
+    c.innerHTML = `<button class="btn" id="btn-pause">Pause</button>
+                   <button class="btn" id="btn-cancel">Cancel</button>`;
+    $('btn-pause').onclick = () => control('pause', 'Pausing…');
+    $('btn-cancel').onclick = () => {
+      if (confirm('Cancel this transcription? Finished parts are kept.')) control('cancel', 'Cancelling…');
+    };
+  } else if (job.status === 'paused') {
+    c.innerHTML = `<button class="btn" id="btn-resume">Resume</button>
+                   <button class="btn" id="btn-cancel">Cancel</button>`;
+    $('btn-resume').onclick = () => control('resume', 'Resuming…');
+    $('btn-cancel').onclick = () => control('cancel', 'Cancelling…');
+  } else if (job.status === 'error' || job.status === 'canceled') {
+    c.innerHTML = `<button class="btn" id="btn-retry">Retry</button>`;
+    $('btn-retry').onclick = () => control('retry', 'Queueing…');
+  } else {
+    c.innerHTML = '';
+  }
+
   const done = job.status === 'done';
   $('exports').innerHTML = done ? `
     <a href="/read/${job.id}" target="_blank" title="Clean reading view">Read</a>
@@ -242,6 +301,10 @@ function renderContent() {
     out.push(renderSummary(job));
   } else {
     const segments = job.segments?.length ? job.segments : state.liveSegments;
+    if (job.status === 'paused' && job.chunks?.length) {
+      out.push(`<div class="notice">Paused after ${job.next_chunk} of ${job.chunks.length}
+        parts. The text below is what finished; Resume continues from there.</div>`);
+    }
     out.push(renderTranscript(segments, job.status));
   }
   $('content').innerHTML = out.join('');
@@ -324,6 +387,23 @@ function renderTranscript(segments, status) {
       <div class="body">${who}<div>${esc(t.text)}</div></div>
     </div>`;
   }).join('');
+}
+
+async function control(action, busyLabel) {
+  const btn = $(`btn-${action}`);
+  if (btn) { btn.disabled = true; btn.textContent = busyLabel; }
+  try {
+    const res = await fetch(`/api/jobs/${state.activeId}/${action}`, { method: 'POST' });
+    if (!res.ok) throw new Error((await res.json()).detail || 'Failed');
+    // Resuming reopens the event stream; the others are reflected by SSE state.
+    if (action === 'resume' || action === 'retry') { if (state.source) state.source.close(); listen(state.activeId); }
+  } catch (err) {
+    alert(err.message);
+  }
+  const job = await (await fetch(`/api/jobs/${state.activeId}`)).json();
+  state.active = job;
+  await refreshJobs();
+  renderDetail();
 }
 
 async function saveToFolder() {
