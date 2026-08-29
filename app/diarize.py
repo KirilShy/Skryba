@@ -66,11 +66,17 @@ def _load_pipeline():
                 "accepted the model terms for pyannote/speaker-diarization-3.1 "
                 "and pyannote/segmentation-3.0 while signed in."
             )
-        # MPS accelerates the segmentation model; some pyannote ops still fall
+        # GPU accelerates the segmentation model; some pyannote ops still fall
         # back to CPU, which torch handles transparently.
-        if torch.backends.mps.is_available():
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+        elif torch.backends.mps.is_available():
+            device = torch.device("mps")
+        else:
+            device = None
+        if device is not None:
             try:
-                pipeline.to(torch.device("mps"))
+                pipeline.to(device)
             except Exception:
                 pass  # CPU is slower but always correct
         _pipeline = pipeline

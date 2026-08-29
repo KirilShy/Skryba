@@ -6,3 +6,4 @@ data/jobs/*
 .env
 __pycache__/
 *.pyc
+*.egg-info/

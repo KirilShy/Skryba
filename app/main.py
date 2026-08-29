@@ -16,7 +16,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, diarize, formats, summarize
+from . import config, diarize, formats, summarize, transcribe
 from .jobs import store
 
 app = FastAPI(title="Skryba", docs_url=None, redoc_url=None)
@@ -47,6 +47,7 @@ async def capabilities() -> dict:
         "diarization": diarize.is_available(),
         "summarization": summarize.is_available(),
         "summary_provider": summarize.provider_label(),
+        "transcribe_backend": transcribe.BACKEND,
     }
 
 
@@ -288,11 +289,17 @@ async def save_to_folder(job_id: str) -> dict:
         written.append(str(path))
 
     revealed = False
-    if sys.platform == "darwin":
-        target = config.EXPORT_DIR / f"{stem}.txt"
+    target = config.EXPORT_DIR / f"{stem}.txt"
+    # explorer.exe requires "/select," glued to the path with no space, unlike
+    # every other Windows CLI flag — a separate argv item breaks the parse.
+    reveal_cmd = {
+        "darwin": ["open", "-R", str(target)],
+        "win32": ["explorer", f"/select,{target}"],
+    }.get(sys.platform)
+    if reveal_cmd:
         try:
-            # Local-only app: opening Finder for the user is the whole point.
-            subprocess.run(["open", "-R", str(target)], timeout=5, check=False)
+            # Local-only app: opening Finder/Explorer for the user is the whole point.
+            subprocess.run(reveal_cmd, timeout=5, check=False)
             revealed = True
         except (OSError, subprocess.SubprocessError):
             revealed = False

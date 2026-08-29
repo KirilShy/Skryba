@@ -18,7 +18,19 @@ WHISPER_MODELS = {
     "medium": "mlx-community/whisper-medium-mlx",
     "small": "mlx-community/whisper-small-mlx",
 }
+# Same keys, resolved instead to CTranslate2 model names for the faster-whisper
+# backend (transcribe_fw.py), which downloads its own converted weights.
+WHISPER_MODELS_FASTER = {
+    "turbo": "large-v3-turbo",
+    "large": "large-v3",
+    "medium": "medium",
+    "small": "small",
+}
 DEFAULT_WHISPER = os.environ.get("WHISPER_MODEL", "turbo")
+
+# mlx on Apple Silicon, faster-whisper (CUDA if available, else CPU) elsewhere.
+# Override to force one explicitly, e.g. to run faster-whisper on a Mac too.
+TRANSCRIBE_BACKEND = os.environ.get("TRANSCRIBE_BACKEND", "").strip().lower()
 
 DIARIZATION_MODEL = os.environ.get("DIARIZATION_MODEL", "pyannote/speaker-diarization-3.1")
 HF_TOKEN = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")

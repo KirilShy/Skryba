@@ -1,11 +1,13 @@
 # Skryba
 
-Local meeting transcription for Apple Silicon. Drop in a recording, get a
-searchable transcript with speaker labels — without your audio ever leaving the
-machine.
+Local meeting transcription. Drop in a recording, get a searchable transcript
+with speaker labels — without your audio ever leaving the machine.
 
 Built because uploading client meetings to a cloud transcription service was not
 an option.
+
+Runs on Apple Silicon (MLX, on the GPU) and on Windows/Linux (faster-whisper,
+CUDA if an NVIDIA GPU is present, otherwise CPU) — see [Backends](#backends).
 
 ```
 ┌──────────────────────────────────────┐
@@ -27,7 +29,9 @@ an option.
 
 Whisper on Apple Silicon is usually run through `faster-whisper`, which has no
 Metal backend — it pins your CPU cores and ignores the GPU entirely. Skryba uses
-[MLX](https://github.com/ml-explore/mlx) instead.
+[MLX](https://github.com/ml-explore/mlx) instead, on the Mac. Elsewhere — Windows,
+Linux — `faster-whisper` is exactly the right tool, and runs on an NVIDIA GPU via
+CUDA when one is present. See [Backends](#backends).
 
 Measured on an M2 (16 GB), transcribing a 35-minute meeting:
 
@@ -39,7 +43,8 @@ Measured on an M2 (16 GB), transcribing a 35-minute meeting:
 
 ## Features
 
-- **Fast** — Whisper on the GPU via MLX, ~13× realtime on an M2
+- **Fast** — the GPU does the work: MLX on Apple Silicon, CUDA via
+  `faster-whisper` on Windows/Linux
 - **Private** — audio is transcribed locally; nothing is uploaded
 - **Speaker labels** — optional diarization via [pyannote](https://github.com/pyannote/pyannote-audio)
 - **AI summaries** — optional decisions and action items via the Claude API
@@ -48,11 +53,35 @@ Measured on an M2 (16 GB), transcribing a 35-minute meeting:
 - **Exports** — Markdown, plain text, SRT, VTT, JSON
 - **Crash-safe** — every transcript is written to disk as it is produced
 
+## Backends
+
+Skryba picks a transcription backend automatically, at import time, based on
+platform (`app/transcribe.py`):
+
+| Platform | Backend | Device |
+| --- | --- | --- |
+| macOS (Apple Silicon) | `mlx_whisper` | Metal GPU |
+| Windows / Linux | `faster-whisper` | CUDA if an NVIDIA GPU is visible, else CPU (int8) |
+
+Both backends implement the same four functions (`load_audio`,
+`transcribe_window`, `detect_language`, `SAMPLE_RATE`), so the job pipeline
+(`app/jobs.py`) never branches on platform. Force one explicitly with
+`TRANSCRIBE_BACKEND=mlx` or `TRANSCRIBE_BACKEND=faster-whisper` in `.env` —
+useful to test `faster-whisper` on a Mac, or to force CPU-only decoding.
+
+Model names differ per backend for the same `--model` choice (`turbo` /
+`large` / `medium` / `small`) — see `WHISPER_MODELS` and
+`WHISPER_MODELS_FASTER` in `app/config.py`. Both download their own converted
+weights from Hugging Face on first use.
+
 ## Requirements
 
-- Apple Silicon Mac (M1 or newer)
+- **macOS**: Apple Silicon (M1 or newer)
+- **Windows / Linux**: any 64-bit machine; an NVIDIA GPU is optional but
+  strongly recommended — `faster-whisper` on CPU is roughly 10-20× slower
 - Python 3.13
-- `ffmpeg` — `brew install ffmpeg`
+- `ffmpeg` — `brew install ffmpeg` (macOS), `winget install Gyan.FFmpeg`
+  (Windows), or your distro's package manager (Linux)
 
 ## Install
 
@@ -60,26 +89,38 @@ Measured on an M2 (16 GB), transcribing a 35-minute meeting:
 git clone https://github.com/KirilShy/Skryba.git
 cd Skryba
 uv venv --python 3.13 .venv
-uv pip install --python .venv/bin/python -r pyproject.toml
+uv pip install --python .venv/bin/python -e .
 ```
+
+On Windows, use the venv's `Scripts` path instead of `bin`:
+
+```powershell
+uv venv --python 3.13 .venv
+uv pip install --python .venv\Scripts\python.exe -e .
+```
+
+`pyproject.toml` resolves `mlx-whisper` on macOS and `faster-whisper`
+everywhere else automatically — nothing to choose by hand.
 
 Speaker labels need extra dependencies (~2.5 GB, mostly PyTorch):
 
 ```bash
-uv pip install --python .venv/bin/python -r pyproject.toml --extra diarize
+uv pip install --python .venv/bin/python -e . --extra diarize
 ```
 
 ## Run
 
 ```bash
-./run.sh
+./run.sh          # macOS / Linux
+.\run.ps1         # Windows
 ```
 
 Opens <http://127.0.0.1:8420>. Drag a recording onto the sidebar. Text appears
 live as it decodes; clicking any timestamp seeks the audio player.
 
 The first run downloads Whisper weights from Hugging Face (~1.6 GB for
-`turbo`) into `~/.cache/huggingface`. Later runs are offline.
+`turbo`) into `~/.cache/huggingface` (`%USERPROFILE%\.cache\huggingface` on
+Windows). Later runs are offline.
 
 ## Optional features
 
@@ -107,11 +148,14 @@ detects that specific case and tells you, rather than failing obscurely.
 
 ## Choosing a model
 
-| Model | Speed on M2 | When to use |
+| Model | Speed on M2 (MLX) | When to use |
 | --- | --- | --- |
 | `turbo` | ~13× realtime | Default. Best accuracy per second. |
 | `large` | ~5× realtime | Hard audio: heavy accents, crosstalk, poor mics. |
 | `medium` / `small` | faster still | Quick drafts, or clean single-speaker audio. |
+
+Relative speeds are similar on `faster-whisper`/CUDA; absolute numbers depend
+on the GPU. On CPU, expect roughly 0.3-0.5× realtime for `turbo`.
 
 Setting the language explicitly (`en`, `pl`, `uk`) is both faster and more
 accurate than auto-detect when you already know it.
@@ -136,24 +180,29 @@ Two more worth setting in `.env`:
   answer; one 73-minute Polish meeting was detected as English.
 
 Note that `mlx-whisper` has no beam search decoder, so decoding is greedy with
-Whisper's temperature-fallback schedule. Word timestamps are enabled to drive
-Whisper's own hallucination suppression, which costs roughly 20% throughput.
+Whisper's temperature-fallback schedule (`faster-whisper` does support beam
+search, but Skryba keeps both backends on the same greedy settings so a
+transcript doesn't change character depending on which machine ran it). Word
+timestamps are enabled on both backends to drive Whisper's own hallucination
+suppression, which costs some throughput.
 
 ## Layout
 
 ```
 app/
-  main.py        FastAPI routes, SSE progress stream, reader view
-  jobs.py        job queue, pipeline orchestration, persistence
-  transcribe.py  MLX Whisper wrapper with live progress
-  diarize.py     pyannote wrapper + speaker/segment alignment
-  summarize.py   Claude structured-output summary
-  formats.py     Markdown / TXT / SRT / VTT rendering
-  audio.py       ffmpeg + ffprobe helpers
-  static/        the single-page UI
+  main.py          FastAPI routes, SSE progress stream, reader view
+  jobs.py          job queue, pipeline orchestration, persistence
+  transcribe.py    picks a backend by platform, re-exports its interface
+  transcribe_mlx.py   MLX Whisper wrapper (Apple Silicon GPU)
+  transcribe_fw.py    faster-whisper wrapper (CUDA / CPU)
+  diarize.py       pyannote wrapper + speaker/segment alignment
+  summarize.py     Claude structured-output summary
+  formats.py       Markdown / TXT / SRT / VTT rendering
+  audio.py         ffmpeg + ffprobe helpers
+  static/          the single-page UI
 data/
-  uploads/       your recordings (git-ignored)
-  jobs/          one JSON per job (git-ignored)
+  uploads/         your recordings (git-ignored)
+  jobs/            one JSON per job (git-ignored)
 ```
 
 Jobs run one at a time — there is a single GPU, so queuing beats thrashing.
@@ -162,11 +211,13 @@ Jobs run one at a time — there is a single GPU, so queuing beats thrashing.
 
 A few decisions that are not obvious from the code:
 
-- **Progress comes from parsing Whisper's own console output.** `mlx_whisper`
-  exposes no progress hook, but prints one line per decoded segment. Skryba
-  captures that stream for the progress bar and live preview, while the
-  authoritative segments still come from the return value — so a format change
-  upstream costs you the preview, never the transcript.
+- **Progress comes from parsing Whisper's own console output — on MLX only.**
+  `mlx_whisper` exposes no progress hook, but prints one line per decoded
+  segment. Skryba captures that stream for the progress bar and live preview,
+  while the authoritative segments still come from the return value — so a
+  format change upstream costs you the preview, never the transcript.
+  `faster-whisper` needs none of this: its `transcribe()` already returns a
+  segment generator, so progress is driven straight off that.
 - **Diarization and summarization are non-fatal.** If either fails you still get
   the transcript, and the UI explains what went wrong.
 - **Turns are cut on a hard length cap, not only on pauses.** Whisper emits
