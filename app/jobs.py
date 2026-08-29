@@ -390,6 +390,12 @@ class JobStore:
         if not job.segments:
             raise RuntimeError("Whisper found no speech in this recording.")
 
+        # A pause/cancel clicked during the last chunk's transcription (the
+        # only in-flight check point for a single-chunk recording) has had no
+        # chance to be honoured yet — without this, a job with both diarize
+        # and summarize off would sail straight through to "done" regardless.
+        self._check_control(job)
+
         # ---- diarize (optional, non-fatal) ----
         if job.options.get("diarize"):
             self._check_control(job)

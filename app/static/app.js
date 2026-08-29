@@ -141,6 +141,10 @@ async function refreshJobs() {
 }
 
 function renderJobs() {
+  // Deleting a job mid-run would race the worker thread still writing to its
+  // file, so only offer it once nothing is actively touching that job.
+  const canDelete = (j) => !['running', 'queued', 'paused'].includes(j.status);
+
   $('job-list').innerHTML = state.jobs.map((j) => {
     const pct = Math.round((j.progress || 0) * 100);
     const running = j.status === 'running';
@@ -152,6 +156,8 @@ function renderJobs() {
       : j.status === 'error' ? 'Failed'
       : j.meta?.duration ? clock(j.meta.duration) : 'Queued';
     return `<div class="job ${j.id === state.activeId ? 'active' : ''}" data-id="${j.id}">
+      ${canDelete(j) ? `<button class="job-delete" data-delete-id="${j.id}"
+        title="Delete recording" aria-label="Delete recording">&times;</button>` : ''}
       <div class="job-name">${esc(j.filename)}</div>
       <div class="job-meta"><span class="dot ${j.status}"></span>${esc(line)}</div>
       ${running ? `<div class="bar"><i style="width:${pct}%"></i></div>` : ''}
@@ -159,9 +165,31 @@ function renderJobs() {
   }).join('') || '<p style="font-size:12.5px;color:var(--text-dim)">Nothing yet.</p>';
 
   $('job-list').onclick = (e) => {
+    const delBtn = e.target.closest('.job-delete');
+    if (delBtn) { e.stopPropagation(); deleteJob(delBtn.dataset.deleteId); return; }
     const el = e.target.closest('.job');
     if (el) select(el.dataset.id);
   };
+}
+
+async function deleteJob(id) {
+  const job = state.jobs.find((j) => j.id === id);
+  if (!confirm(`Delete "${job ? job.filename : 'this recording'}"? This removes the recording and its transcript permanently.`)) return;
+  try {
+    const res = await fetch(`/api/jobs/${id}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error((await res.json()).detail || 'Delete failed');
+  } catch (err) {
+    alert(err.message);
+    return;
+  }
+  if (state.activeId === id) {
+    if (state.source) { state.source.close(); state.source = null; }
+    state.activeId = null;
+    state.active = null;
+    $('detail').hidden = true;
+    $('empty').hidden = false;
+  }
+  await refreshJobs();
 }
 
 /* ---------------- detail ---------------- */
@@ -229,23 +257,43 @@ function renderDetail() {
   $('d-title').textContent = job.meta?.title || job.filename;
   renderSub();
 
-  // transport controls for a job that is still in flight
+  // transport controls for a job that is still in flight.
+  // A pause/cancel request only takes effect at the next chunk boundary, so
+  // the button's busy state is driven off job.control (server truth, arrives
+  // over SSE almost immediately) rather than a local flag — otherwise the very
+  // next render (from the request's own response, or a later SSE tick) would
+  // put back a live Pause/Cancel pair and make the click look like a no-op.
   const c = $('controls') || { };
   if (job.status === 'running' || job.status === 'queued') {
-    c.innerHTML = `<button class="btn" id="btn-pause">Pause</button>
-                   <button class="btn" id="btn-cancel">Cancel</button>`;
-    $('btn-pause').onclick = () => control('pause', 'Pausing…');
-    $('btn-cancel').onclick = () => {
-      if (confirm('Cancel this transcription? Finished parts are kept.')) control('cancel', 'Cancelling…');
-    };
+    if (job.control === 'cancel') {
+      c.innerHTML = `<button class="btn" disabled>Cancelling…</button>`;
+    } else if (job.control === 'pause') {
+      c.innerHTML = `<button class="btn" disabled>Pausing…</button>`;
+    } else {
+      c.innerHTML = `<button class="btn" id="btn-pause">Pause</button>
+                     <button class="btn" id="btn-cancel">Cancel</button>`;
+      $('btn-pause').onclick = () => control('pause', 'Pausing…');
+      $('btn-cancel').onclick = () => {
+        if (confirm('Cancel this transcription? Finished parts are kept.')) control('cancel', 'Cancelling…');
+      };
+    }
   } else if (job.status === 'paused') {
-    c.innerHTML = `<button class="btn" id="btn-resume">Resume</button>
-                   <button class="btn" id="btn-cancel">Cancel</button>`;
-    $('btn-resume').onclick = () => control('resume', 'Resuming…');
-    $('btn-cancel').onclick = () => control('cancel', 'Cancelling…');
+    if (job.control === 'cancel') {
+      c.innerHTML = `<button class="btn" disabled>Cancelling…</button>`;
+    } else {
+      c.innerHTML = `<button class="btn" id="btn-resume">Resume</button>
+                     <button class="btn" id="btn-cancel">Cancel</button>`;
+      $('btn-resume').onclick = () => control('resume', 'Resuming…');
+      $('btn-cancel').onclick = () => control('cancel', 'Cancelling…');
+    }
   } else if (job.status === 'error' || job.status === 'canceled') {
-    c.innerHTML = `<button class="btn" id="btn-retry">Retry</button>`;
+    c.innerHTML = `<button class="btn" id="btn-retry">Retry</button>
+                   <button class="btn btn-danger" id="btn-delete">Delete</button>`;
     $('btn-retry').onclick = () => control('retry', 'Queueing…');
+    $('btn-delete').onclick = () => deleteJob(job.id);
+  } else if (job.status === 'done') {
+    c.innerHTML = `<button class="btn btn-danger" id="btn-delete">Delete</button>`;
+    $('btn-delete').onclick = () => deleteJob(job.id);
   } else {
     c.innerHTML = '';
   }

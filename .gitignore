@@ -7,3 +7,6 @@ data/jobs/*
 __pycache__/
 *.pyc
 *.egg-info/
+.server.pid
+.server.stdout.log
+.server.stderr.log
