@@ -312,3 +312,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, .job:focus-visible {
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.5s; } }
 .controls { display: flex; gap: 8px; margin-top: 10px; }
+
+/* Brand lockup: mark beside the wordmark, aligned on the optical centre. */
+.brand { display: flex; align-items: center; gap: 11px; }
+.brand-mark { flex: none; width: 34px; height: 34px; }
+.brand-text { min-width: 0; }

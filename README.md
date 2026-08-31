@@ -227,3 +227,18 @@ A few decisions that are not obvious from the code:
 ## Licence
 
 MIT
+
+## Brand assets
+
+`tools/make_brand.py` regenerates every icon from `Skryba Logo _ Soundwave.png`.
+The master art ships on an off-white ground with no alpha, so the script cuts
+the ground to transparency and un-premultiplies the anti-aliased rim against the
+sampled background colour — otherwise the mark renders as a white card in dark
+mode and its edges look washed out.
+
+Favicons at 16 and 32 px use a simplified soundwave rather than the full
+lockup, which turns to mush at that size.
+
+```bash
+.venv/bin/python tools/make_brand.py
+```

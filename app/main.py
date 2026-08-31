@@ -352,6 +352,9 @@ def _render_reader(job) -> str:
 <html lang="{html.escape(str(job.meta.get('language') or 'en'))}">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{title}</title>
+<link rel="icon" href="/static/brand/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/brand/icon-32.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/static/brand/icon-180.png">
 <style>
 :root {{ --bg:#fbfbfc; --fg:#1c1c1f; --dim:#6b6b76; --accent:#4f46e5; --rule:#e3e3e7; }}
 @media (prefers-color-scheme: dark) {{
@@ -362,6 +365,8 @@ body {{ margin:0; background:var(--bg); color:var(--fg);
   font:17px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI",Georgia,serif;
   -webkit-font-smoothing:antialiased; }}
 .wrap {{ max-width:720px; margin:0 auto; padding:56px 24px 96px; }}
+.mark {{ width:30px; height:30px; display:block; margin-bottom:14px; }}
+@media print {{ .mark {{ display:none; }} }}
 h1 {{ font-size:28px; line-height:1.25; margin:0 0 6px; letter-spacing:-.02em; }}
 .meta {{ color:var(--dim); font-size:14px; margin-bottom:8px; }}
 .actions {{ margin:20px 0 40px; padding-bottom:28px; border-bottom:1px solid var(--rule); }}
@@ -391,6 +396,7 @@ section {{ display:flex; gap:18px; margin-bottom:26px; }}
 }}
 </style></head>
 <body><div class="wrap">
+<img class="mark" src="/static/brand/mark-128.png" width="30" height="30" alt="">
 <h1>{title}</h1>
 <div class="meta">{html.escape(" · ".join(meta_bits))}</div>
 <div class="actions">
