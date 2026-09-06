@@ -1,0 +1,13 @@
+{
+  "name": "Skryba",
+  "short_name": "Skryba",
+  "description": "Local meeting transcription for Apple Silicon",
+  "icons": [
+    { "src": "/static/brand/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/static/brand/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ],
+  "theme_color": "#4f46e5",
+  "background_color": "#131316",
+  "display": "standalone",
+  "start_url": "/"
+}
