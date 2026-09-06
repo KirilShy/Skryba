@@ -100,6 +100,13 @@ a { color: var(--accent); }
 .opt-label { font-size: 11.5px; font-weight: 600; text-transform: uppercase;
   letter-spacing: .05em; color: var(--text-dim); margin-bottom: 6px; display: block; }
 
+.job-search {
+  width: 100%; box-sizing: border-box; padding: 7px 10px; margin-bottom: 10px;
+  border-radius: 9px; border: 1px solid var(--border); background: var(--surface-2);
+  color: var(--text); font-size: 13px;
+}
+.job-search::placeholder { color: var(--text-dim); }
+
 /* segmented pill tabs */
 .segmented {
   display: flex; background: var(--surface-2); border-radius: 999px;

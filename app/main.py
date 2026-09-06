@@ -101,8 +101,9 @@ async def create_job(
 
 
 @app.get("/api/jobs")
-async def list_jobs() -> list[dict]:
-    return store.list()
+async def list_jobs(q: str = "") -> list[dict]:
+    """`q` filters by filename or transcript text (case-insensitive substring)."""
+    return store.list(q)
 
 
 @app.get("/api/jobs/{job_id}")

@@ -138,9 +138,22 @@ class JobStore:
     def get(self, job_id: str) -> Job | None:
         return self._jobs.get(job_id)
 
-    def list(self) -> list[dict]:
+    def list(self, query: str = "") -> list[dict]:
         jobs = sorted(self._jobs.values(), key=lambda j: j.created_at, reverse=True)
+        q = query.strip().casefold()
+        if q:
+            # Segments never leave the server for the list view (only the
+            # active job's), so matching transcript text has to happen here.
+            jobs = [j for j in jobs if self._matches(j, q)]
         return [j.public(include_segments=False) for j in jobs]
+
+    @staticmethod
+    def _matches(job: Job, q: str) -> bool:
+        if q in job.filename.casefold():
+            return True
+        if q in str(job.meta.get("title") or "").casefold():
+            return True
+        return any(q in (seg.get("text") or "").casefold() for seg in job.segments)
 
     def pause(self, job_id: str) -> bool:
         job = self._jobs.get(job_id)

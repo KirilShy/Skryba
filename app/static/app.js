@@ -10,6 +10,7 @@ const state = {
   tab: 'transcript',
   source: null,       // EventSource for the active job
   model: 'turbo',
+  search: '',         // filters the recordings list, by filename or transcript text
 };
 
 /* Upload settings persist per browser: most people transcribe the same
@@ -136,8 +137,21 @@ async function upload(files) {
 /* ---------------- job list ---------------- */
 
 async function refreshJobs() {
-  state.jobs = await (await fetch('/api/jobs')).json();
+  const url = state.search ? `/api/jobs?q=${encodeURIComponent(state.search)}` : '/api/jobs';
+  state.jobs = await (await fetch(url)).json();
   renderJobs();
+}
+
+function wireSearch() {
+  const input = $('job-search');
+  let debounce;
+  input.addEventListener('input', () => {
+    clearTimeout(debounce);
+    debounce = setTimeout(() => {
+      state.search = input.value.trim();
+      refreshJobs();
+    }, 200);
+  });
 }
 
 function renderJobs() {
@@ -162,7 +176,8 @@ function renderJobs() {
       <div class="job-meta"><span class="dot ${j.status}"></span>${esc(line)}</div>
       ${running ? `<div class="bar"><i style="width:${pct}%"></i></div>` : ''}
     </div>`;
-  }).join('') || '<p style="font-size:12.5px;color:var(--text-dim)">Nothing yet.</p>';
+  }).join('') || `<p style="font-size:12.5px;color:var(--text-dim)">${
+    state.search ? 'No matches.' : 'Nothing yet.'}</p>`;
 
   $('job-list').onclick = (e) => {
     const delBtn = e.target.closest('.job-delete');
@@ -561,6 +576,7 @@ function wireTheme() {
   wireTheme();
   await loadCaps();
   wireUpload();
+  wireSearch();
   await refreshJobs();
   // Land on something useful: reattach to whatever is still running, otherwise
   // open the most recent recording so a finished transcript is right there.
