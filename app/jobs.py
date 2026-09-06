@@ -203,6 +203,34 @@ class JobStore:
         self._queue.put(job.id)
         return True
 
+    def edit_turn(self, job_id: str, turn_index: int, text: str) -> bool:
+        """Correct a turn's merged text, folding its underlying segments into one.
+
+        Only safe once the worker is done touching job.segments — a running
+        job is still appending to it. Turn indices are recomputed fresh from
+        the current segments on every call, and stay stable across edits:
+        folding one turn's segments into one doesn't move any other turn's
+        start/end, so re-grouping produces the same turns in the same order.
+        """
+        job = self._jobs.get(job_id)
+        if not job or job.status not in ("done", "error", "canceled"):
+            return False
+        text = text.strip()
+        if not text or not job.segments:
+            return False
+        turns = formats.group_by_turns(job.segments)
+        if turn_index < 0 or turn_index >= len(turns):
+            return False
+        turn = turns[turn_index]
+        new_segment = {
+            "start": turn["start"], "end": turn["end"],
+            "text": text, "speaker": turn["speaker"],
+        }
+        job.segments[turn["seg_start"]:turn["seg_end"] + 1] = [new_segment]
+        self._persist(job)
+        self._emit(job.id, {"type": "state", "job": job.public(include_segments=False)})
+        return True
+
     def delete(self, job_id: str) -> bool:
         with self._lock:
             job = self._jobs.pop(job_id, None)

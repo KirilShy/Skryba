@@ -385,11 +385,19 @@ function renderContent() {
       out.push(`<div class="notice">Paused after ${job.next_chunk} of ${job.chunks.length}
         parts. The text below is what finished; Resume continues from there.</div>`);
     }
-    out.push(renderTranscript(segments, job.status));
+    // Editing races the worker thread still appending to job.segments, so it's
+    // only offered once the job has stopped changing under it.
+    const editable = ['done', 'error', 'canceled'].includes(job.status);
+    out.push(renderTranscript(segments, job.status, editable));
   }
   $('content').innerHTML = out.join('');
 
   $('content').onclick = (e) => {
+    const editBtn = e.target.closest('.turn-edit');
+    if (editBtn) { startEditTurn(editBtn.closest('.turn')); return; }
+    const saveBtn = e.target.closest('.turn-save');
+    if (saveBtn) { saveEditTurn(saveBtn.closest('.turn')); return; }
+    if (e.target.closest('.turn-cancel')) { renderContent(); return; }
     const stamp = e.target.closest('.stamp');
     if (!stamp) return;
     const player = $('player');
@@ -433,7 +441,7 @@ function renderSummary(job) {
   return parts.join('');
 }
 
-function renderTranscript(segments, status) {
+function renderTranscript(segments, status, editable) {
   if (!segments?.length) {
     return status === 'running'
       ? '<p style="color:var(--text-dim)">Listening… text will appear as it is decoded.</p>'
@@ -442,6 +450,9 @@ function renderTranscript(segments, status) {
   // Merge Whisper's prosody-sized fragments into readable paragraphs. Cut on a
   // speaker change, or on a pause once the turn is long enough to stand alone —
   // without that second rule an undiarized recording becomes one giant block.
+  // Mirrors formats.group_by_turns on the server — same constants, same
+  // iteration order — so a turn's index here matches the index the PATCH
+  // /api/jobs/{id}/turns/{index} endpoint groups from.
   const MAX_TURN = 35, PAUSE = 1.2;
   const turns = [];
   const speakers = [];
@@ -459,15 +470,23 @@ function renderTranscript(segments, status) {
       turns.push({ speaker: who, start: seg.start, end: seg.end, text: seg.text });
     }
   }
+  // Stashed so the edit handlers can read a turn's raw (unescaped) text by
+  // index without round-tripping it through an HTML attribute.
+  state.turns = turns;
+
   const html = turns.map((t, i) => {
     const cls = t.speaker ? `sp${speakers.indexOf(t.speaker) % 6}` : '';
     const who = t.speaker ? `<div class="who ${cls}">${esc(t.speaker)}</div>` : '';
     // Mark the newest turn while a job streams, so it is obvious that text is
     // still arriving rather than the view having stalled.
     const live = status === 'running' && i === turns.length - 1 ? ' is-live' : '';
-    return `<div class="turn${live}" data-start="${t.start}" data-end="${t.end}">
+    const editBtn = editable
+      ? `<button class="turn-edit" title="Edit this text" aria-label="Edit this text">&#9998;</button>`
+      : '';
+    return `<div class="turn${live}" data-turn="${i}" data-start="${t.start}" data-end="${t.end}">
       <button class="stamp" data-t="${t.start}">${clock(t.start)}</button>
-      <div class="body">${who}<div>${esc(t.text)}</div></div>
+      <div class="body">${who}<div class="turn-text">${esc(t.text)}</div></div>
+      ${editBtn}
     </div>`;
   }).join('');
 
@@ -475,6 +494,50 @@ function renderTranscript(segments, status) {
     ? '<p class="live-note"><span class="live-dot"></span>Transcribing…</p>'
     : '';
   return `<div class="transcript">${html}${tail}</div>`;
+}
+
+function startEditTurn(turnEl) {
+  const turn = state.turns[Number(turnEl.dataset.turn)];
+  const body = turnEl.querySelector('.body');
+  turnEl.querySelector('.turn-edit')?.remove();
+
+  const editor = document.createElement('textarea');
+  editor.className = 'turn-editor';
+  editor.value = turn.text;
+  body.querySelector('.turn-text').replaceWith(editor);
+  editor.focus();
+  editor.setSelectionRange(editor.value.length, editor.value.length);
+
+  const actions = document.createElement('div');
+  actions.className = 'turn-edit-actions';
+  actions.innerHTML = `<button class="btn turn-save">Save</button>
+                        <button class="btn turn-cancel">Cancel</button>`;
+  body.appendChild(actions);
+}
+
+async function saveEditTurn(turnEl) {
+  const idx = Number(turnEl.dataset.turn);
+  const editor = turnEl.querySelector('.turn-editor');
+  const text = editor.value.trim();
+  if (!text) { alert('Text cannot be empty.'); return; }
+
+  const saveBtn = turnEl.querySelector('.turn-save');
+  const cancelBtn = turnEl.querySelector('.turn-cancel');
+  saveBtn.disabled = true; cancelBtn.disabled = true; saveBtn.textContent = 'Saving…';
+  try {
+    const res = await fetch(`/api/jobs/${state.activeId}/turns/${idx}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (!res.ok) throw new Error((await res.json()).detail || 'Save failed');
+    state.active = await res.json();
+    const li = state.jobs.findIndex((j) => j.id === state.activeId);
+    if (li >= 0) state.jobs[li] = { ...state.jobs[li], ...state.active };
+  } catch (err) {
+    alert(err.message);
+  }
+  renderContent();
 }
 
 async function control(action, busyLabel) {

@@ -12,7 +12,7 @@ import sys
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -156,6 +156,22 @@ async def delete_job(job_id: str) -> dict:
     if not store.delete(job_id):
         raise HTTPException(404, "No such job.")
     return {"deleted": job_id}
+
+
+@app.patch("/api/jobs/{job_id}/turns/{turn_index}")
+async def edit_turn(job_id: str, turn_index: int, text: str = Body(..., embed=True)) -> dict:
+    """Correct a misheard turn. `turn_index` matches the reading-view grouping
+    (formats.group_by_turns), not the raw Whisper segment list."""
+    job = store.get(job_id)
+    if not job:
+        raise HTTPException(404, "No such job.")
+    if job.status not in ("done", "error", "canceled"):
+        raise HTTPException(400, "Only a finished transcript can be edited.")
+    if not text.strip():
+        raise HTTPException(400, "Text cannot be empty.")
+    if not store.edit_turn(job_id, turn_index, text):
+        raise HTTPException(400, "That turn no longer exists — the transcript may have changed.")
+    return store.get(job_id).public()
 
 
 @app.post("/api/jobs/{job_id}/summarize")

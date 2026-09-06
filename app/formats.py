@@ -72,9 +72,14 @@ def group_by_turns(segments: list[dict]) -> list[dict]:
 
     Whisper cuts every few seconds, so a single speaker's contribution arrives
     as a dozen pieces. Reading is much easier one turn at a time.
+
+    Each turn also carries seg_start/seg_end: inclusive indices into the
+    original `segments` list. Rendering ignores them, but they're how an
+    in-browser edit of a turn's merged text gets written back onto the
+    specific segments that produced it (see JobStore.edit_turn).
     """
     turns: list[dict] = []
-    for seg in segments:
+    for i, seg in enumerate(segments):
         speaker = seg.get("speaker")
         text = seg["text"].strip()
         if not text:
@@ -87,6 +92,7 @@ def group_by_turns(segments: list[dict]) -> list[dict]:
             if not (too_long or paused):
                 current["text"] += " " + text
                 current["end"] = seg["end"]
+                current["seg_end"] = i
                 continue
 
         turns.append({
@@ -94,6 +100,8 @@ def group_by_turns(segments: list[dict]) -> list[dict]:
             "start": seg["start"],
             "end": seg["end"],
             "text": text,
+            "seg_start": i,
+            "seg_end": i,
         })
     return turns
 
