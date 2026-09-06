@@ -20,7 +20,7 @@
            alt="" decoding="async">
       <div class="brand-text">
         <h1>Skryba</h1>
-        <p id="cap-line">Meeting transcription, local to your Mac</p>
+        <p id="cap-line">Meeting transcription, local to this machine</p>
       </div>
     </div>
 
@@ -83,7 +83,16 @@
       <div class="topbar">
         <h2 id="d-title"></h2>
         <div class="sub" id="d-sub"></div>
-        <audio class="player" id="player" controls preload="metadata"></audio>
+        <audio id="player" preload="metadata"></audio>
+        <div class="player-bar">
+          <button type="button" class="player-toggle" id="player-toggle" aria-label="Play">
+            <svg class="icon-play" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M3 1.5v13l11-6.5z"/></svg>
+            <svg class="icon-pause" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" hidden><path d="M3 1.5h4v13H3zM9 1.5h4v13H9z"/></svg>
+          </button>
+          <span class="player-time" id="player-elapsed">0:00</span>
+          <input type="range" class="player-scrub" id="player-scrub" min="0" max="0" step="0.01" value="0" aria-label="Seek">
+          <span class="player-time player-time-total" id="player-duration">0:00</span>
+        </div>
         <div class="controls" id="controls"></div>
         <div class="tabs">
           <button id="tab-summary" aria-selected="false">Summary</button>

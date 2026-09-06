@@ -221,6 +221,11 @@ async function select(id) {
   const job = await (await fetch(`/api/jobs/${id}`)).json();
   state.active = job;
   $('player').src = `/api/jobs/${id}/audio`;
+  // loadedmetadata will set the real duration once the new file is probed;
+  // reset now so the old recording's numbers don't linger on screen.
+  $('player-scrub').value = 0;
+  $('player-elapsed').textContent = '0:00';
+  $('player-duration').textContent = '0:00';
   renderDetail();
 
   if (state.source) state.source.close();
@@ -635,8 +640,48 @@ function wireTheme() {
   });
 }
 
+// ---------- player ----------
+// The <audio> element carries no `controls` — this drives a themed bar
+// instead, driven purely by the element's own events so it stays in sync
+// no matter what triggers playback (this button, a stamp click, a keyboard
+// shortcut the browser handles natively).
+function wirePlayer() {
+  const audio = $('player');
+  const toggle = $('player-toggle');
+  const playIcon = toggle.querySelector('.icon-play');
+  const pauseIcon = toggle.querySelector('.icon-pause');
+  const scrub = $('player-scrub');
+  const elapsed = $('player-elapsed');
+  const duration = $('player-duration');
+  let scrubbing = false;
+
+  toggle.onclick = () => { audio.paused ? audio.play().catch(() => {}) : audio.pause(); };
+  audio.addEventListener('play', () => {
+    playIcon.hidden = true; pauseIcon.hidden = false; toggle.setAttribute('aria-label', 'Pause');
+  });
+  audio.addEventListener('pause', () => {
+    playIcon.hidden = false; pauseIcon.hidden = true; toggle.setAttribute('aria-label', 'Play');
+  });
+  audio.addEventListener('ended', () => { playIcon.hidden = false; pauseIcon.hidden = true; });
+  audio.addEventListener('loadedmetadata', () => {
+    scrub.max = audio.duration || 0;
+    duration.textContent = clock(audio.duration);
+  });
+  audio.addEventListener('timeupdate', () => {
+    if (scrubbing) return;
+    scrub.value = audio.currentTime;
+    elapsed.textContent = clock(audio.currentTime);
+  });
+  // 'input' fires continuously while dragging (update the label optimistically);
+  // 'change' fires once on release, which is when the seek should actually land —
+  // committing on every 'input' tick would fight the audio's own timeupdate.
+  scrub.addEventListener('input', () => { scrubbing = true; elapsed.textContent = clock(scrub.value); });
+  scrub.addEventListener('change', () => { audio.currentTime = parseFloat(scrub.value); scrubbing = false; });
+}
+
 (async function init() {
   wireTheme();
+  wirePlayer();
   await loadCaps();
   wireUpload();
   wireSearch();
