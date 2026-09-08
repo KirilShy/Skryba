@@ -648,21 +648,23 @@ function wireTheme() {
 function wirePlayer() {
   const audio = $('player');
   const toggle = $('player-toggle');
-  const playIcon = toggle.querySelector('.icon-play');
-  const pauseIcon = toggle.querySelector('.icon-pause');
   const scrub = $('player-scrub');
   const elapsed = $('player-elapsed');
   const duration = $('player-duration');
   let scrubbing = false;
 
+  // Which icon shows and the button's fill both key off .is-playing (CSS) —
+  // there's no JS icon-hidden toggling, since setting .hidden on an inline
+  // <svg> doesn't reliably reflect onto the element the way it does on a
+  // plain HTMLElement.
   toggle.onclick = () => { audio.paused ? audio.play().catch(() => {}) : audio.pause(); };
   audio.addEventListener('play', () => {
-    playIcon.hidden = true; pauseIcon.hidden = false; toggle.setAttribute('aria-label', 'Pause');
+    toggle.classList.add('is-playing'); toggle.setAttribute('aria-label', 'Pause');
   });
   audio.addEventListener('pause', () => {
-    playIcon.hidden = false; pauseIcon.hidden = true; toggle.setAttribute('aria-label', 'Play');
+    toggle.classList.remove('is-playing'); toggle.setAttribute('aria-label', 'Play');
   });
-  audio.addEventListener('ended', () => { playIcon.hidden = false; pauseIcon.hidden = true; });
+  audio.addEventListener('ended', () => toggle.classList.remove('is-playing'));
   audio.addEventListener('loadedmetadata', () => {
     scrub.max = audio.duration || 0;
     duration.textContent = clock(audio.duration);

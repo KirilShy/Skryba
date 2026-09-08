@@ -201,7 +201,17 @@ a { color: var(--accent); }
   display: flex; align-items: center; justify-content: center; cursor: pointer;
 }
 .player-toggle:hover { border-color: var(--accent); color: var(--accent); }
+/* A 13px triangle vs. two 13px bars barely reads as a state change — fill the
+   whole button while playing so it's unmistakable at a glance. */
+.player-toggle.is-playing { background: var(--accent); border-color: var(--accent); color: #fff; }
+.player-toggle.is-playing:hover { background: var(--accent); color: #fff; }
 .player-toggle svg { fill: currentColor; }
+/* Which icon shows is driven entirely by this class, not the `hidden`
+   attribute — SVGElement doesn't reliably reflect .hidden the way
+   HTMLElement does, so setting it from JS silently no-ops in places. */
+.player-toggle .icon-pause { display: none; }
+.player-toggle.is-playing .icon-play { display: none; }
+.player-toggle.is-playing .icon-pause { display: block; }
 .player-toggle .icon-play { margin-left: 1px; } /* a triangle's visual weight sits left of its box */
 .player-time {
   flex: none; width: 38px; font-size: 12px; color: var(--text-dim);
