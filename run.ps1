@@ -2,7 +2,11 @@
 # dependencies if anything changed, and (re)starts the server — detached, so
 # closing the window that launched this doesn't kill it. Safe to run repeatedly:
 # if nothing changed and the server's already up, it just opens the browser.
-$ErrorActionPreference = "Stop"
+#
+# Deliberately NOT $ErrorActionPreference = "Stop": git writes routine status
+# lines (e.g. "From https://github.com/...") to stderr even on success, and
+# under "Stop" those get promoted into terminating exceptions that would abort
+# the pull before the merge ever ran.
 Set-Location $PSScriptRoot
 
 if (-not $env:PORT) { $env:PORT = "8420" }
