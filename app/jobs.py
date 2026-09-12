@@ -69,6 +69,12 @@ class JobStore:
         return config.JOB_DIR / f"{job_id}.json"
 
     def _persist(self, job: Job) -> None:
+        if job.id not in self._jobs:
+            # Deleted out from under an in-flight worker, which holds its own
+            # reference to this Job independent of the dict — without this
+            # check, its next per-chunk save would resurrect the file we just
+            # removed, right after the user asked to delete it.
+            return
         tmp = self._path(job.id).with_suffix(".json.tmp")
         tmp.write_text(json.dumps(asdict(job), ensure_ascii=False), encoding="utf-8")
         tmp.replace(self._path(job.id))  # atomic: a crash mid-write can't corrupt a job
@@ -236,6 +242,10 @@ class JobStore:
             job = self._jobs.pop(job_id, None)
         if not job:
             return False
+        # The worker thread may be mid-_process() on this exact job, holding
+        # its own reference independent of the dict — ask it to unwind
+        # promptly rather than keep transcribing a file we're about to erase.
+        job.control = "cancel"
         self._path(job_id).unlink(missing_ok=True)
         for path in (Path(job.source_path), config.UPLOAD_DIR / f"{job_id}.wav"):
             try:

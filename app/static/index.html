@@ -25,8 +25,15 @@
     </div>
 
     <div class="dropzone" id="dropzone">
-      <strong>Drop audio here</strong>
-      <span>or click to choose &middot; m4a, mp3, wav, mp4&hellip;</span>
+      <div id="upload-idle">
+        <strong>Drop audio here</strong>
+        <span>or click to choose &middot; m4a, mp3, wav, mp4&hellip;</span>
+      </div>
+      <div id="upload-progress" hidden>
+        <strong id="upload-name">Uploading&hellip;</strong>
+        <div class="bar"><i id="upload-bar"></i></div>
+        <span id="upload-pct">0%</span>
+      </div>
       <input type="file" id="file-input" multiple hidden
              accept="audio/*,video/*,.m4a,.mp3,.wav,.mp4,.mov,.aac,.flac,.opus">
     </div>

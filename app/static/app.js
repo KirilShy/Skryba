@@ -11,6 +11,7 @@ const state = {
   source: null,       // EventSource for the active job
   model: 'turbo',
   search: '',         // filters the recordings list, by filename or transcript text
+  uploading: false,   // true while a file is mid-upload — blocks a second, duplicate one
 };
 
 /* Upload settings persist per browser: most people transcribe the same
@@ -102,36 +103,79 @@ function wireOptional(key, available, disabledHint) {
 
 function wireUpload() {
   const dz = $('dropzone'), input = $('file-input');
-  dz.onclick = () => input.click();
+  dz.onclick = () => { if (!state.uploading) input.click(); };
   input.onchange = () => { upload([...input.files]); input.value = ''; };
   ['dragenter', 'dragover'].forEach((ev) => dz.addEventListener(ev, (e) => {
-    e.preventDefault(); dz.classList.add('drag');
+    e.preventDefault();
+    if (!state.uploading) dz.classList.add('drag');
   }));
   ['dragleave', 'drop'].forEach((ev) => dz.addEventListener(ev, (e) => {
     e.preventDefault(); dz.classList.remove('drag');
   }));
-  dz.addEventListener('drop', (e) => upload([...(e.dataTransfer?.files || [])]));
+  dz.addEventListener('drop', (e) => {
+    if (state.uploading) return; // a drop mid-upload must not start a second one
+    upload([...(e.dataTransfer?.files || [])]);
+  });
+}
+
+/* XMLHttpRequest, not fetch: fetch has no upload-progress event, and without
+   visible feedback a slow copy of a large recording looks identical to a drop
+   that silently failed — which is exactly what invites a second, duplicate
+   upload of the same file. */
+function uploadOne(file, onProgress) {
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('model', state.model);
+  fd.append('language', $('opt-language').value.trim());
+  fd.append('diarize', $('opt-diarize').checked);
+  fd.append('summarize', $('opt-summary').checked);
+  fd.append('num_speakers', $('opt-speakers').value.trim());
+
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/jobs');
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+    xhr.onload = () => {
+      let data = {};
+      try { data = JSON.parse(xhr.responseText); } catch { /* non-JSON error body */ }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+      else reject(new Error(data.detail || `Upload failed (${xhr.status})`));
+    };
+    xhr.onerror = () => reject(new Error('Upload failed — network error.'));
+    xhr.send(fd);
+  });
 }
 
 async function upload(files) {
-  for (const file of files) {
-    const fd = new FormData();
-    fd.append('file', file);
-    fd.append('model', state.model);
-    fd.append('language', $('opt-language').value.trim());
-    fd.append('diarize', $('opt-diarize').checked);
-    fd.append('summarize', $('opt-summary').checked);
-    fd.append('num_speakers', $('opt-speakers').value.trim());
+  if (!files.length) return;
+  state.uploading = true;
+  $('dropzone').classList.add('busy');
+  $('upload-idle').hidden = true;
+  $('upload-progress').hidden = false;
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    $('upload-name').textContent = files.length > 1
+      ? `Uploading ${i + 1} of ${files.length}: ${file.name}` : `Uploading ${file.name}`;
+    $('upload-bar').style.width = '0%';
+    $('upload-pct').textContent = '0%';
     try {
-      const res = await fetch('/api/jobs', { method: 'POST', body: fd });
-      if (!res.ok) { alert((await res.json()).detail || 'Upload failed'); continue; }
-      const job = await res.json();
+      const job = await uploadOne(file, (frac) => {
+        const pct = Math.round(frac * 100);
+        $('upload-bar').style.width = `${pct}%`;
+        $('upload-pct').textContent = `${pct}%`;
+      });
       await refreshJobs();
       select(job.id);
     } catch (err) {
-      alert(`Upload failed: ${err.message}`);
+      alert(`${file.name}: ${err.message}`);
     }
   }
+
+  state.uploading = false;
+  $('dropzone').classList.remove('busy');
+  $('upload-idle').hidden = false;
+  $('upload-progress').hidden = true;
 }
 
 /* ---------------- job list ---------------- */
@@ -154,11 +198,10 @@ function wireSearch() {
   });
 }
 
-function renderJobs() {
-  // Deleting a job mid-run would race the worker thread still writing to its
-  // file, so only offer it once nothing is actively touching that job.
-  const canDelete = (j) => !['running', 'queued', 'paused'].includes(j.status);
+const ICON_PAUSE = '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M3 1.5h4v13H3zM9 1.5h4v13H9z"/></svg>';
+const ICON_RESUME = '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M3 1.5v13l11-6.5z"/></svg>';
 
+function renderJobs() {
   $('job-list').innerHTML = state.jobs.map((j) => {
     const pct = Math.round((j.progress || 0) * 100);
     const running = j.status === 'running';
@@ -169,9 +212,25 @@ function renderJobs() {
       : j.status === 'canceled' ? 'Canceled'
       : j.status === 'error' ? 'Failed'
       : j.meta?.duration ? clock(j.meta.duration) : 'Queued';
+
+    // A quick action for every state, so a stray or duplicate upload can be
+    // stopped or cleared straight from the list — no need to open it first.
+    const actions = [];
+    if (j.status === 'running' || j.status === 'queued') {
+      actions.push(`<button class="job-action" data-action="pause" data-id="${j.id}"
+        title="Pause" aria-label="Pause">${ICON_PAUSE}</button>`);
+    } else if (j.status === 'paused') {
+      actions.push(`<button class="job-action" data-action="resume" data-id="${j.id}"
+        title="Resume" aria-label="Resume">${ICON_RESUME}</button>`);
+    } else if (j.status === 'error' || j.status === 'canceled') {
+      actions.push(`<button class="job-action" data-action="retry" data-id="${j.id}"
+        title="Retry" aria-label="Retry">&#8635;</button>`);
+    }
+    actions.push(`<button class="job-action job-delete" data-action="delete" data-id="${j.id}"
+      title="Delete recording" aria-label="Delete recording">&times;</button>`);
+
     return `<div class="job ${j.id === state.activeId ? 'active' : ''}" data-id="${j.id}">
-      ${canDelete(j) ? `<button class="job-delete" data-delete-id="${j.id}"
-        title="Delete recording" aria-label="Delete recording">&times;</button>` : ''}
+      <div class="job-actions">${actions.join('')}</div>
       <div class="job-name">${esc(j.filename)}</div>
       <div class="job-meta"><span class="dot ${j.status}"></span>${esc(line)}</div>
       ${running ? `<div class="bar"><i style="width:${pct}%"></i></div>` : ''}
@@ -180,8 +239,13 @@ function renderJobs() {
     state.search ? 'No matches.' : 'Nothing yet.'}</p>`;
 
   $('job-list').onclick = (e) => {
-    const delBtn = e.target.closest('.job-delete');
-    if (delBtn) { e.stopPropagation(); deleteJob(delBtn.dataset.deleteId); return; }
+    const btn = e.target.closest('.job-action');
+    if (btn) {
+      e.stopPropagation();
+      if (btn.dataset.action === 'delete') deleteJob(btn.dataset.id);
+      else quickJobAction(btn.dataset.id, btn.dataset.action);
+      return;
+    }
     const el = e.target.closest('.job');
     if (el) select(el.dataset.id);
   };
@@ -203,6 +267,28 @@ async function deleteJob(id) {
     state.active = null;
     $('detail').hidden = true;
     $('empty').hidden = false;
+  }
+  await refreshJobs();
+}
+
+/* Pause/resume/retry triggered from the list rather than the detail pane —
+   same endpoints as control() below, but not tied to state.activeId, and
+   without stealing focus into that job's detail view. */
+async function quickJobAction(id, action) {
+  try {
+    const res = await fetch(`/api/jobs/${id}/${action}`, { method: 'POST' });
+    if (!res.ok) throw new Error((await res.json()).detail || 'Failed');
+  } catch (err) {
+    alert(err.message);
+    return;
+  }
+  if (state.activeId === id) {
+    state.active = await (await fetch(`/api/jobs/${id}`)).json();
+    if (action === 'resume' || action === 'retry') {
+      if (state.source) state.source.close();
+      listen(id);
+    }
+    renderDetail();
   }
   await refreshJobs();
 }

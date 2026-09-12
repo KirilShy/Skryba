@@ -93,6 +93,16 @@ a { color: var(--accent); }
   background: var(--surface-2);
 }
 .dropzone:hover, .dropzone.drag { border-color: var(--accent); background: var(--accent-soft); }
+/* pointer-events:none means a drop mid-upload doesn't even reach this element's
+   listeners — the browser hit-tests through to whatever's underneath instead
+   of firing our drop handler, so a second upload can't start here at all. */
+.dropzone.busy { cursor: default; pointer-events: none; border-color: var(--accent); }
+#upload-progress #upload-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#upload-progress #upload-pct {
+  font-size: 12px; color: var(--text-dim); font-variant-numeric: tabular-nums;
+}
 .dropzone strong { display: block; font-size: 14px; }
 .dropzone span { font-size: 12px; color: var(--text-dim); }
 
@@ -158,15 +168,21 @@ a { color: var(--accent); }
 .job:hover { background: var(--surface-2); }
 .job.active { background: var(--accent-soft); border-color: var(--accent); }
 .job-name { font-size: 13.5px; font-weight: 500; overflow: hidden;
-  text-overflow: ellipsis; white-space: nowrap; padding-right: 20px; }
-.job-delete {
-  display: none; position: absolute; top: 8px; right: 8px; width: 20px; height: 20px;
-  align-items: center; justify-content: center; border-radius: 6px; border: none;
-  background: transparent; color: var(--text-dim); cursor: pointer; font-size: 15px;
-  line-height: 1; padding: 0;
+  text-overflow: ellipsis; white-space: nowrap; padding-right: 44px; }
+/* Room for up to two icons (a pause/resume/retry plus delete), reserved
+   uniformly even on rows with only one so text doesn't reflow between them. */
+.job-actions {
+  display: none; position: absolute; top: 6px; right: 6px; gap: 2px;
 }
-.job:hover .job-delete { display: flex; }
-.job-delete:hover { background: var(--surface-2); color: var(--err); }
+.job:hover .job-actions { display: flex; }
+.job-action {
+  width: 20px; height: 20px; display: flex; align-items: center; justify-content: center;
+  border-radius: 6px; border: none; background: transparent; color: var(--text-dim);
+  cursor: pointer; font-size: 13px; line-height: 1; padding: 0;
+}
+.job-action svg { fill: currentColor; }
+.job-action:hover { background: var(--surface); color: var(--accent); }
+.job-action.job-delete:hover { color: var(--err); }
 .job-meta { font-size: 11.5px; color: var(--text-dim); display: flex;
   align-items: center; gap: 6px; margin-top: 2px; }
 .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--text-dim); }
