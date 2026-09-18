@@ -118,6 +118,13 @@ uv pip install --python .venv/bin/python -e . --extra diarize
 Opens <http://127.0.0.1:8420>. Drag a recording onto the sidebar. Text appears
 live as it decodes; clicking any timestamp seeks the audio player.
 
+Prefer not to open a terminal every time? Double-click **`Start Skryba.command`**
+(macOS) or **`Start Skryba.vbs`** (Windows) instead. Either one pulls the latest
+`dev`, starts the server if it isn't already running, and opens the browser —
+safe to click as often as you like, since it detects an already-running
+instance and just reconnects rather than starting a second one. The server
+keeps running after the launcher window closes.
+
 The first run downloads Whisper weights from Hugging Face (~1.6 GB for
 `turbo`) into `~/.cache/huggingface` (`%USERPROFILE%\.cache\huggingface` on
 Windows). Later runs are offline.
