@@ -174,6 +174,26 @@ async def edit_turn(job_id: str, turn_index: int, text: str = Body(..., embed=Tr
     return store.get(job_id).public()
 
 
+@app.post("/api/jobs/{job_id}/turns/{turn_index}/confirm")
+async def confirm_turn(job_id: str, turn_index: int) -> dict:
+    """The reader checked a flagged turn and it is right as written."""
+    if not store.get(job_id):
+        raise HTTPException(404, "No such job.")
+    if not store.confirm_turn(job_id, turn_index):
+        raise HTTPException(400, "That turn no longer exists — the transcript may have changed.")
+    return store.get(job_id).public()
+
+
+@app.delete("/api/jobs/{job_id}/turns/{turn_index}")
+async def drop_turn(job_id: str, turn_index: int) -> dict:
+    """Remove a turn that was never actually said."""
+    if not store.get(job_id):
+        raise HTTPException(404, "No such job.")
+    if not store.drop_turn(job_id, turn_index):
+        raise HTTPException(400, "That turn no longer exists — the transcript may have changed.")
+    return store.get(job_id).public()
+
+
 @app.post("/api/jobs/{job_id}/summarize")
 async def summarize_job(job_id: str) -> dict:
     """Summarize a transcript that was produced without the summary step."""

@@ -286,13 +286,38 @@ a { color: var(--accent); }
 .turn.playing .body { background: var(--accent-soft); border-radius: 8px;
   margin: -4px -8px; padding: 4px 8px; }
 
-.turn-edit {
-  display: none; position: absolute; top: 8px; right: 8px; width: 22px; height: 22px;
+.turn .body { padding-right: 70px; }
+.turn-actions { position: absolute; top: 8px; right: 8px; display: flex; gap: 2px; }
+.turn-edit, .turn-ok, .turn-drop {
+  display: none; width: 22px; height: 22px;
   align-items: center; justify-content: center; border-radius: 6px; border: none;
   background: transparent; color: var(--text-dim); cursor: pointer; font-size: 13px; padding: 0;
 }
-.turn:hover .turn-edit { display: flex; }
+.turn:hover .turn-edit, .turn:hover .turn-ok, .turn:hover .turn-drop,
+.turn.flag-focus .turn-actions button { display: flex; }
 .turn-edit:hover { background: var(--surface); color: var(--accent); }
+.turn-ok:hover { background: var(--surface); color: var(--ok); }
+.turn-drop:hover { background: var(--surface); color: var(--err); }
+
+/* Lines worth a second look. A quiet underline rather than a loud fill: on a
+   hard recording there are many, and the page still has to be readable. */
+.flagged { text-decoration: underline dotted var(--warn); text-underline-offset: 3px; cursor: help; }
+.flagged.artifact { text-decoration: line-through var(--err); color: var(--text-dim); }
+mark.doubt { background: color-mix(in srgb, var(--warn) 24%, transparent); color: inherit;
+  border-radius: 3px; padding: 0 2px; }
+.turn.has-flag { box-shadow: inset 2px 0 0 var(--warn); }
+.turn.is-artifact { box-shadow: inset 2px 0 0 var(--err); }
+.turn.flag-focus { background: var(--surface-2); }
+
+.review-bar { display: flex; align-items: center; gap: 8px; margin: 0 0 14px;
+  font-size: 13px; color: var(--text-dim); position: sticky; top: 0; z-index: 2;
+  background: var(--bg); padding: 6px 0; }
+.review-count { margin-right: 2px; }
+.review-nav { padding: 2px 9px; }
+.grade { font-size: 12px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--border); }
+.grade.clear { color: var(--ok); }
+.grade.mixed { color: var(--warn); }
+.grade.difficult { color: var(--err); }
 .turn-editor {
   width: 100%; min-height: 64px; padding: 8px 10px; border-radius: 8px;
   border: 1px solid var(--accent); background: var(--surface); color: var(--text);

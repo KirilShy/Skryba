@@ -479,6 +479,7 @@ function renderContent() {
     // Editing races the worker thread still appending to job.segments, so it's
     // only offered once the job has stopped changing under it.
     const editable = ['done', 'error', 'canceled'].includes(job.status);
+    if (editable) out.push(renderReviewBar(job));
     out.push(renderTranscript(segments, job.status, editable));
   }
   $('content').innerHTML = out.join('');
@@ -489,6 +490,12 @@ function renderContent() {
     const saveBtn = e.target.closest('.turn-save');
     if (saveBtn) { saveEditTurn(saveBtn.closest('.turn')); return; }
     if (e.target.closest('.turn-cancel')) { renderContent(); return; }
+    const okBtn = e.target.closest('.turn-ok');
+    if (okBtn) { turnAction(okBtn.closest('.turn'), 'POST', '/confirm'); return; }
+    const dropBtn = e.target.closest('.turn-drop');
+    if (dropBtn) { turnAction(dropBtn.closest('.turn'), 'DELETE', ''); return; }
+    const nav = e.target.closest('.review-nav');
+    if (nav) { jumpFlag(Number(nav.dataset.dir)); return; }
     const stamp = e.target.closest('.stamp');
     if (!stamp) return;
     const player = $('player');
@@ -557,8 +564,9 @@ function renderTranscript(segments, status, editable) {
     if (sameSpeaker && !shouldBreak) {
       last.text += ' ' + seg.text;
       last.end = seg.end;
+      last.segs.push(seg);
     } else {
-      turns.push({ speaker: who, start: seg.start, end: seg.end, text: seg.text });
+      turns.push({ speaker: who, start: seg.start, end: seg.end, text: seg.text, segs: [seg] });
     }
   }
   // Stashed so the edit handlers can read a turn's raw (unescaped) text by
@@ -571,13 +579,24 @@ function renderTranscript(segments, status, editable) {
     // Mark the newest turn while a job streams, so it is obvious that text is
     // still arriving rather than the view having stalled.
     const live = status === 'running' && i === turns.length - 1 ? ' is-live' : '';
-    const editBtn = editable
-      ? `<button class="turn-edit" title="Edit this text" aria-label="Edit this text">&#9998;</button>`
-      : '';
-    return `<div class="turn${live}" data-turn="${i}" data-start="${t.start}" data-end="${t.end}">
+    const flags = t.segs.filter((g) => g.flag);
+    const artifact = flags.some((g) => g.flag.level === 'artifact');
+    const flagCls = flags.length ? (artifact ? ' has-flag is-artifact' : ' has-flag') : '';
+    let actions = '';
+    if (editable) {
+      if (flags.length) {
+        actions += `<button class="turn-ok" title="This is right — clear the flag" aria-label="Mark as correct">&#10003;</button>`;
+      }
+      if (artifact) {
+        actions += `<button class="turn-drop" title="Remove — this was never said" aria-label="Remove this line">&#10005;</button>`;
+      }
+      actions += `<button class="turn-edit" title="Edit this text" aria-label="Edit this text">&#9998;</button>`;
+    }
+    const text = t.segs.map(renderSegment).join(' ');
+    return `<div class="turn${live}${flagCls}" data-turn="${i}" data-start="${t.start}" data-end="${t.end}">
       <button class="stamp" data-t="${t.start}">${clock(t.start)}</button>
-      <div class="body">${who}<div class="turn-text">${esc(t.text)}</div></div>
-      ${editBtn}
+      <div class="body">${who}<div class="turn-text">${text}</div></div>
+      <div class="turn-actions">${actions}</div>
     </div>`;
   }).join('');
 
@@ -587,10 +606,66 @@ function renderTranscript(segments, status, editable) {
   return `<div class="transcript">${html}${tail}</div>`;
 }
 
+// One segment's text, with the words Whisper doubted marked individually and
+// the whole line wrapped when it carries a verdict.
+function renderSegment(seg) {
+  const text = seg.text || '';
+  if (!seg.flag) return esc(text);
+  let html = '', at = 0;
+  for (const [a, b] of [...(seg.flag.words || [])].sort((x, y) => x[0] - y[0])) {
+    if (a < at) continue;
+    html += esc(text.slice(at, a)) + `<mark class="doubt">${esc(text.slice(a, b))}</mark>`;
+    at = b;
+  }
+  html += esc(text.slice(at));
+  return `<span class="flagged ${seg.flag.level}" title="${esc(seg.flag.why)}">${html}</span>`;
+}
+
+// The review bar: how many lines need a look, and buttons to walk them.
+function renderReviewBar(job) {
+  const bits = [];
+  if (job.audio) {
+    const pct = Math.round(job.audio.confidence * 100);
+    bits.push(`<span class="grade ${job.audio.label}" title="Median word confidence ${pct}%">
+      ${job.audio.label} audio</span>`);
+  }
+  if (job.flagged) {
+    bits.push(`<span class="review-count">${job.flagged} line${job.flagged === 1 ? '' : 's'} to check</span>
+      <button class="btn review-nav" data-dir="-1" aria-label="Previous flagged line">&uarr;</button>
+      <button class="btn review-nav" data-dir="1" aria-label="Next flagged line">&darr;</button>`);
+  } else if (job.audio) {
+    bits.push('<span class="review-count">nothing flagged</span>');
+  }
+  return bits.length ? `<div class="review-bar">${bits.join('')}</div>` : '';
+}
+
+function jumpFlag(dir) {
+  const flagged = [...document.querySelectorAll('.turn.has-flag')];
+  if (!flagged.length) return;
+  const cur = flagged.findIndex((el) => el.classList.contains('flag-focus'));
+  const next = cur < 0 ? (dir > 0 ? 0 : flagged.length - 1)
+    : (cur + dir + flagged.length) % flagged.length;
+  flagged.forEach((el) => el.classList.remove('flag-focus'));
+  flagged[next].classList.add('flag-focus');
+  flagged[next].scrollIntoView({ block: 'center', behavior: 'smooth' });
+}
+
+async function turnAction(turnEl, method, suffix) {
+  const idx = Number(turnEl.dataset.turn);
+  try {
+    const res = await fetch(`/api/jobs/${state.activeId}/turns/${idx}${suffix}`, { method });
+    if (!res.ok) throw new Error((await res.json()).detail || 'Failed');
+    state.active = await res.json();
+  } catch (err) {
+    alert(err.message);
+  }
+  renderContent();
+}
+
 function startEditTurn(turnEl) {
   const turn = state.turns[Number(turnEl.dataset.turn)];
   const body = turnEl.querySelector('.body');
-  turnEl.querySelector('.turn-edit')?.remove();
+  turnEl.querySelector('.turn-actions')?.remove();
 
   const editor = document.createElement('textarea');
   editor.className = 'turn-editor';

@@ -17,7 +17,7 @@ import re
 from pathlib import Path
 from typing import Callable
 
-from . import config
+from . import config, quality
 
 # e.g. "[00:23.480 --> 00:27.120]  and then we ship it"
 _VERBOSE_LINE = re.compile(
@@ -140,12 +140,17 @@ def transcribe_window(
         end = min(float(seg["end"]), window_seconds)
         if start >= window_seconds - 0.05 or end <= start:
             continue
-        segments.append({
+        item = {
             "start": start + offset,
             "end": end + offset,
             "text": text,
             "speaker": None,
-        })
+        }
+        q = quality.pack(text, seg.get("words"), seg.get("avg_logprob"),
+                         seg.get("no_speech_prob"), seg.get("compression_ratio"))
+        if q:
+            item["q"] = q
+        segments.append(item)
     return {"segments": segments, "language": result.get("language")}
 
 

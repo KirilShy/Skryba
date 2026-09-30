@@ -13,7 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
-from . import config
+from . import config, quality
 
 SAMPLE_RATE = 16000
 
@@ -95,12 +95,18 @@ def transcribe_window(
         end = min(float(seg.end), window_seconds)
         if start >= window_seconds - 0.05 or end <= start:
             continue
-        segments.append({
+        item = {
             "start": start + offset,
             "end": end + offset,
             "text": text,
             "speaker": None,
-        })
+        }
+        words = [{"word": w.word, "probability": w.probability} for w in (seg.words or [])]
+        q = quality.pack(text, words, seg.avg_logprob, seg.no_speech_prob,
+                         seg.compression_ratio)
+        if q:
+            item["q"] = q
+        segments.append(item)
         if on_segment is not None:
             progress = min(end / window_seconds, 1.0)
             try:

@@ -18,7 +18,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from . import audio, config, diarize, formats, summarize, transcribe
+from . import audio, config, diarize, formats, quality, summarize, transcribe
 
 # Pipeline stages, in order, with the share of the progress bar each one owns.
 STAGE_WEIGHTS = {"prepare": 0.03, "transcribe": 0.62, "diarize": 0.30, "summarize": 0.05}
@@ -48,8 +48,15 @@ class Job:
     def public(self, include_segments: bool = True) -> dict:
         data = asdict(self)
         data.pop("source_path", None)
-        if not include_segments:
-            data.pop("segments", None)
+        data.pop("segments", None)
+        if include_segments:
+            # Raw confidence numbers stay on disk; the client gets verdicts.
+            # A running job's last line has no "next line" yet, so silence
+            # after it proves nothing until the job has stopped.
+            data["segments"] = quality.annotate(
+                self.segments, finished=self.status != "running")
+            data["flagged"] = sum(1 for s in data["segments"] if s.get("flag"))
+            data["audio"] = quality.audio_grade(self.segments)
         return data
 
 
@@ -231,10 +238,39 @@ class JobStore:
         new_segment = {
             "start": turn["start"], "end": turn["end"],
             "text": text, "speaker": turn["speaker"],
+            # Someone has read and corrected this; it is no longer in doubt.
+            "ok": True,
         }
         job.segments[turn["seg_start"]:turn["seg_end"] + 1] = [new_segment]
         self._persist(job)
         self._emit(job.id, {"type": "state", "job": job.public(include_segments=False)})
+        return True
+
+    def confirm_turn(self, job_id: str, turn_index: int) -> bool:
+        """Mark a turn as read-and-correct, clearing any flags on it."""
+        job = self._jobs.get(job_id)
+        if not job or job.status not in ("done", "error", "canceled"):
+            return False
+        turns = formats.group_by_turns(job.segments)
+        if turn_index < 0 or turn_index >= len(turns):
+            return False
+        turn = turns[turn_index]
+        for seg in job.segments[turn["seg_start"]:turn["seg_end"] + 1]:
+            seg["ok"] = True
+        self._persist(job)
+        return True
+
+    def drop_turn(self, job_id: str, turn_index: int) -> bool:
+        """Remove a turn outright — for text Whisper invented over silence."""
+        job = self._jobs.get(job_id)
+        if not job or job.status not in ("done", "error", "canceled"):
+            return False
+        turns = formats.group_by_turns(job.segments)
+        if turn_index < 0 or turn_index >= len(turns):
+            return False
+        turn = turns[turn_index]
+        del job.segments[turn["seg_start"]:turn["seg_end"] + 1]
+        self._persist(job)
         return True
 
     def delete(self, job_id: str) -> bool:
@@ -495,7 +531,8 @@ class JobStore:
         if fmt == "txt":
             return formats.to_txt(job.segments), "text/plain; charset=utf-8", f"{stem}.txt"
         if fmt == "json":
-            payload = {"meta": job.meta, "segments": job.segments, "summary": job.summary}
+            payload = {"meta": job.meta, "segments": quality.annotate(job.segments),
+                       "summary": job.summary}
             return (json.dumps(payload, ensure_ascii=False, indent=2),
                     "application/json; charset=utf-8", f"{stem}.json")
         return (formats.to_markdown(job.segments, job.meta, job.summary),

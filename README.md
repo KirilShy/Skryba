@@ -129,6 +129,28 @@ The first run downloads Whisper weights from Hugging Face (~1.6 GB for
 `turbo`) into `~/.cache/huggingface` (`%USERPROFILE%\.cache\huggingface` on
 Windows). Later runs are offline.
 
+## Lines worth a second look
+
+Skryba marks the parts of a transcript you should double-check, and gives the
+recording an overall grade (clear / mixed / difficult).
+
+- **Doubtful lines** get a dotted underline, with the specific words Whisper
+  was unsure of highlighted. A misheard name or term usually shows up here.
+- **Invented lines** are struck through. Whisper recites subtitle credits such
+  as "Dziękuje za oglądanie" or "KONIEC" over silence, and loops on repeats.
+
+Use the arrows in the bar above the transcript to step through them. On each
+flagged line, ✓ confirms it is right, ✕ removes an invented line, and ✎ edits.
+
+Two details behind the design: Whisper's `avg_logprob` is shared by every line
+in a 30-second window, so it cannot rank lines, and an invented line scores as
+confident as a real one. The flags therefore use per-word probability, plus
+separate detectors for invented text. On a hard recording only the worst 12%
+of lines are flagged, so the page stays readable.
+
+Transcripts made before this feature still get the invented-line checks;
+doubtful-word marks need a fresh transcription.
+
 ## Optional features
 
 Copy `.env.example` to `.env` and fill in what you want. Toggles for features
