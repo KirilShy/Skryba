@@ -12,7 +12,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError
 
-from . import config, formats
+from . import config, formats, llm
 
 
 class SummaryUnavailable(RuntimeError):
@@ -80,10 +80,16 @@ def active_provider() -> str | None:
         or os.environ.get("ANTHROPIC_AUTH_TOKEN")
         or (Path.home() / ".config" / "anthropic").is_dir()
     )
+    if forced == "local":
+        return "local" if llm.is_available() else None
     if forced == "openrouter":
         return "openrouter" if has_openrouter else None
     if forced == "anthropic":
         return "anthropic" if has_anthropic else None
+    # A model on this machine keeps the transcript private and costs nothing,
+    # so it wins over a paid API whenever one is running.
+    if llm.is_available():
+        return "local"
     if has_openrouter:
         return "openrouter"
     if has_anthropic:
@@ -98,6 +104,8 @@ def is_available() -> bool:
 def provider_label() -> str:
     """Human-readable description of the configured backend, for the UI."""
     provider = active_provider()
+    if provider == "local":
+        return llm.label()
     if provider == "openrouter":
         return f"OpenRouter · {config.OPENROUTER_MODEL}"
     if provider == "anthropic":
@@ -119,18 +127,183 @@ def _build_prompt(segments: list[dict], meta: dict) -> str:
     return f"{chr(10).join(context)}\n\nTranscript:\n\n{transcript}"
 
 
-def summarize(segments: list[dict], meta: dict) -> dict:
-    """Return a MeetingSummary as a plain dict, using whichever backend is set."""
+def summarize(segments: list[dict], meta: dict, on_progress=None) -> dict:
+    """Return a MeetingSummary as a plain dict, using whichever backend is set.
+
+    `on_progress(done, total)` is called by backends that work in steps.
+    """
     provider = active_provider()
+    if provider == "local":
+        return _summarize_local(segments, meta, on_progress)
     prompt = _build_prompt(segments, meta)
     if provider == "openrouter":
         return _summarize_openrouter(prompt)
     if provider == "anthropic":
         return _summarize_anthropic(prompt)
     raise SummaryUnavailable(
-        "No summary provider configured. Set OPENROUTER_API_KEY or "
-        "ANTHROPIC_API_KEY in your .env file."
+        "No summary provider available. Start a local model (Ollama or LM "
+        "Studio), or set OPENROUTER_API_KEY or ANTHROPIC_API_KEY in .env."
     )
+
+
+# ---- local model -----------------------------------------------------------
+# A small local model cannot hold an hour of transcript, and gets vague when
+# asked to. So the meeting is read a piece at a time, each piece reduced to
+# notes, and only the notes are combined. Lists (decisions, action items) are
+# merged in code rather than by the model, so nothing found in a piece can be
+# dropped in the final pass.
+
+class _Notes(BaseModel):
+    points: list[str] = Field(default_factory=list)
+    decisions: list[str] = Field(default_factory=list)
+    action_items: list[dict] = Field(default_factory=list)
+    open_questions: list[str] = Field(default_factory=list)
+
+
+_NOTES_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "points": {"type": "array", "items": {"type": "string"}},
+        "decisions": {"type": "array", "items": {"type": "string"}},
+        "action_items": {"type": "array", "items": {
+            "type": "object",
+            "properties": {"owner": {"type": ["string", "null"]},
+                           "task": {"type": "string"},
+                           "due": {"type": ["string", "null"]}},
+            "required": ["owner", "task", "due"], "additionalProperties": False}},
+        "open_questions": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["points", "decisions", "action_items", "open_questions"],
+    "additionalProperties": False,
+}
+_OVERVIEW_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "headline": {"type": "string"},
+        "summary": {"type": "string"},
+        "key_points": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["headline", "summary", "key_points"],
+    "additionalProperties": False,
+}
+
+_MAP_SYSTEM = """You take notes on one part of a meeting transcript.
+
+The transcript was made by speech recognition, so some words are wrong. Read \
+through the errors. Reply with JSON only, using these keys:
+- points: the main things said in this part, one short sentence each
+- decisions: things that were actually decided. Empty list if none.
+- action_items: tasks someone agreed to do, each with owner, task, due. Use \
+null for owner or due when it was not said.
+- open_questions: questions raised and not answered. Empty list if none.
+
+Only write what this part of the transcript says. Do not guess. Write in the \
+same language as the transcript."""
+
+_REDUCE_SYSTEM = """You write the overview of a meeting from notes taken on it.
+
+Reply with JSON only, using these keys:
+- headline: one sentence saying what the meeting was about
+- summary: two or three short paragraphs covering what was discussed
+- key_points: the five to eight most important points, most important first
+
+Use only what the notes say. Write in the same language as the notes."""
+
+
+def _chunks(segments: list[dict]) -> list[str]:
+    limit = max(config.LOCAL_LLM_CHUNK_CHARS, 1500)
+    chunks, current = [], ""
+    for turn in formats.group_by_turns(segments):
+        who = f"{turn['speaker']}: " if turn["speaker"] else ""
+        line = f"[{formats.short_clock(turn['start'])}] {who}{turn['text']}\n"
+        if current and len(current) + len(line) > limit:
+            chunks.append(current)
+            current = ""
+        current += line
+    if current.strip():
+        chunks.append(current)
+    return chunks
+
+
+def _clean_list(items, seen: set) -> list[str]:
+    out = []
+    for item in items or []:
+        text = str(item).strip()
+        key = re.sub(r"\W+", " ", text.lower()).strip()
+        if len(text) > 2 and key not in seen:
+            seen.add(key)
+            out.append(text)
+    return out
+
+
+def _summarize_local(segments: list[dict], meta: dict, on_progress=None) -> dict:
+    chunks = _chunks(segments)
+    if not chunks:
+        raise SummaryUnavailable("The transcript is empty — nothing to summarize.")
+    total = len(chunks) + 1
+    points, decisions, questions, actions = [], [], [], []
+    seen_p, seen_d, seen_q, seen_a = set(), set(), set(), set()
+
+    try:
+        for i, chunk in enumerate(chunks):
+            if on_progress:
+                on_progress(i, total)
+            reply = llm.complete(
+                [{"role": "system", "content": _MAP_SYSTEM},
+                 {"role": "user", "content": f"Part {i + 1} of {len(chunks)}:\n\n{chunk}"}],
+                schema=_NOTES_SCHEMA, max_tokens=1200,
+            )
+            try:
+                notes = _Notes.model_validate(llm.parse_json(reply))
+            except (llm.LLMUnavailable, ValidationError):
+                continue  # one unreadable part should not sink the whole summary
+            points += _clean_list(notes.points, seen_p)
+            decisions += _clean_list(notes.decisions, seen_d)
+            questions += _clean_list(notes.open_questions, seen_q)
+            for item in notes.action_items:
+                task = str((item or {}).get("task") or "").strip()
+                key = re.sub(r"\W+", " ", task.lower()).strip()
+                if len(task) > 2 and key not in seen_a:
+                    seen_a.add(key)
+                    actions.append({"owner": (item.get("owner") or None),
+                                    "task": task, "due": (item.get("due") or None)})
+
+        if not points and not decisions and not actions:
+            raise SummaryUnavailable(
+                "The local model could not extract anything from this transcript. "
+                "A larger model usually helps."
+            )
+
+        if on_progress:
+            on_progress(len(chunks), total)
+        digest = "\n".join(f"- {p}" for p in points)
+        if decisions:
+            digest += "\n\nDecisions:\n" + "\n".join(f"- {d}" for d in decisions)
+        digest = digest[: max(config.LOCAL_LLM_CHUNK_CHARS, 1500)]
+        title = f"Recording: {meta['title']}\n\n" if meta.get("title") else ""
+        reply = llm.complete(
+            [{"role": "system", "content": _REDUCE_SYSTEM},
+             {"role": "user", "content": f"{title}Notes:\n{digest}"}],
+            schema=_OVERVIEW_SCHEMA, max_tokens=1200,
+        )
+        try:
+            overview = llm.parse_json(reply)
+        except llm.LLMUnavailable:
+            overview = {}
+    except llm.LLMUnavailable as exc:
+        raise SummaryUnavailable(str(exc)) from exc
+
+    if on_progress:
+        on_progress(total, total)
+    key_points = _clean_list(overview.get("key_points"), set()) or points[:8]
+    return MeetingSummary(
+        headline=str(overview.get("headline") or "").strip() or (points[0] if points else ""),
+        summary=str(overview.get("summary") or "").strip() or " ".join(points[:6]),
+        key_points=key_points,
+        decisions=decisions,
+        action_items=[ActionItem(**a) for a in actions],
+        open_questions=questions,
+    ).model_dump()
 
 
 def _summarize_anthropic(prompt: str) -> dict:

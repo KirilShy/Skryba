@@ -422,3 +422,29 @@ button:focus-visible, a:focus-visible, input:focus-visible, .job:focus-visible {
 .brand { display: flex; align-items: center; gap: 11px; }
 .brand-mark { flex: none; width: 34px; height: 34px; }
 .brand-text { min-width: 0; }
+
+/* ---------- ask ---------- */
+.ask { max-width: 78ch; }
+.ask-hint { color: var(--text-dim); margin: 0 0 18px; }
+.ask-item { margin-bottom: 22px; }
+.ask-q { font-weight: 600; margin-bottom: 6px; }
+.ask-a { line-height: 1.6; }
+.stamp.cite { display: inline; padding: 0 5px; margin: 0 1px; font-size: 12px;
+  border-radius: 5px; background: var(--accent-soft); color: var(--accent); }
+.ask-sources { margin-top: 8px; font-size: 13px; color: var(--text-dim); }
+.ask-sources summary { cursor: pointer; }
+.ask-sources > div { margin-top: 6px; display: flex; gap: 8px; }
+.ask-form { display: flex; gap: 8px; position: sticky; bottom: 0;
+  background: var(--bg); padding: 12px 0; }
+.ask-form input { flex: 1; padding: 9px 12px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--surface); }
+.ask-setup { max-width: 60ch; line-height: 1.6; }
+.ask-setup code { background: var(--surface-2); padding: 1px 6px; border-radius: 5px; }
+/* Timestamps outside a transcript line need their own button reset. */
+.ask .stamp { border: none; background: transparent; color: var(--text-dim);
+  font: inherit; font-size: 12.5px; font-variant-numeric: tabular-nums;
+  cursor: pointer; padding: 0; flex: none; width: 44px; text-align: right;
+  align-self: flex-start; line-height: 1.55; }
+.ask .stamp:hover { color: var(--accent); }
+.ask .stamp.cite { width: auto; padding: 0 6px; background: var(--accent-soft);
+  color: var(--accent); line-height: inherit; }

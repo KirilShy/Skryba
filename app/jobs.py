@@ -507,7 +507,11 @@ class JobStore:
             self._check_control(job)
             self._update(job, stage="summarize", message="Summarizing…")
             try:
-                job.summary = summarize.summarize(job.segments, job.meta)
+                job.summary = summarize.summarize(
+                    job.segments, job.meta,
+                    on_progress=lambda done, total: self._stage_progress(
+                        job, "summarize", done / max(total, 1)),
+                )
             except summarize.SummaryUnavailable as exc:
                 job.meta["summary_error"] = str(exc)
             except Exception as exc:

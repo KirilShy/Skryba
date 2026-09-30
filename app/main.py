@@ -16,7 +16,7 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, diarize, formats, summarize, transcribe
+from . import ask, config, diarize, formats, llm, summarize, transcribe
 from .jobs import store
 
 app = FastAPI(title="Skryba", docs_url=None, redoc_url=None)
@@ -47,6 +47,10 @@ async def capabilities() -> dict:
         "diarization": diarize.is_available(),
         "summarization": summarize.is_available(),
         "summary_provider": summarize.provider_label(),
+        # Asking questions needs a model on this machine; the paid APIs are
+        # only wired up for summaries.
+        "ask": llm.is_available(),
+        "local_model": llm.label(),
         "transcribe_backend": transcribe.BACKEND,
     }
 
@@ -195,20 +199,83 @@ async def drop_turn(job_id: str, turn_index: int) -> dict:
 
 
 @app.post("/api/jobs/{job_id}/summarize")
-async def summarize_job(job_id: str) -> dict:
+async def summarize_job(job_id: str) -> StreamingResponse:
     """Summarize a transcript that was produced without the summary step."""
     job = store.get(job_id)
     if not job:
         raise HTTPException(404, "No such job.")
     if job.status != "done" or not job.segments:
         raise HTTPException(400, "This job has no finished transcript yet.")
-    try:
-        job.summary = await asyncio.to_thread(summarize.summarize, job.segments, job.meta)
-    except summarize.SummaryUnavailable as exc:
-        raise HTTPException(400, str(exc)) from exc
-    job.meta.pop("summary_error", None)
-    store.persist(job)
-    return {"summary": job.summary}
+    if not summarize.is_available():
+        raise HTTPException(400, "No summary provider available. Start a local model "
+                                 "(Ollama or LM Studio), or add an API key to .env.")
+
+    # A local model works through a long meeting in steps and can take minutes,
+    # so progress is streamed as one JSON object per line rather than making
+    # the browser wait on a silent request.
+    events: queue.Queue = queue.Queue()
+
+    def work() -> None:
+        try:
+            result = summarize.summarize(
+                job.segments, job.meta,
+                on_progress=lambda done, total: events.put({"done": done, "total": total}),
+            )
+            job.summary = result
+            job.meta.pop("summary_error", None)
+            store.persist(job)
+            events.put({"summary": result})
+        except summarize.SummaryUnavailable as exc:
+            events.put({"error": str(exc)})
+        except Exception as exc:  # never leave the stream hanging
+            events.put({"error": f"Summarization failed: {exc}"})
+        events.put(None)
+
+    async def lines():
+        task = asyncio.create_task(asyncio.to_thread(work))
+        while True:
+            item = await asyncio.to_thread(events.get)
+            if item is None:
+                break
+            yield json.dumps(item, ensure_ascii=False) + "\n"
+        await task
+
+    return StreamingResponse(lines(), media_type="application/x-ndjson")
+
+
+@app.post("/api/jobs/{job_id}/ask")
+async def ask_job(job_id: str, payload: dict) -> StreamingResponse:
+    """Answer a question about this meeting with the local model."""
+    job = store.get(job_id)
+    if not job:
+        raise HTTPException(404, "No such job.")
+    if not job.segments:
+        raise HTTPException(400, "This job has no transcript yet.")
+    question = str(payload.get("question") or "").strip()
+    if not question:
+        raise HTTPException(400, "Ask a question.")
+    if len(question) > 1000:
+        raise HTTPException(400, "That question is too long.")
+    if not llm.is_available():
+        raise HTTPException(400, "No local model found. Start Ollama or LM Studio, "
+                                 "or set LOCAL_LLM_URL in .env.")
+
+    turns = ask.retrieve(job.segments, question)
+
+    def lines():
+        # Sources first, so the reader sees what the answer is drawn from even
+        # while the model is still thinking.
+        yield json.dumps({"sources": ask.sources(turns)}, ensure_ascii=False) + "\n"
+        try:
+            for piece in ask.answer(job.segments, question, job.summary, turns):
+                yield json.dumps({"delta": piece}, ensure_ascii=False) + "\n"
+        except llm.LLMUnavailable as exc:
+            yield json.dumps({"error": str(exc)}, ensure_ascii=False) + "\n"
+        except Exception as exc:
+            yield json.dumps({"error": f"The local model failed: {exc}"}, ensure_ascii=False) + "\n"
+        yield json.dumps({"end": True}) + "\n"
+
+    return StreamingResponse(lines(), media_type="application/x-ndjson")
 
 
 @app.get("/api/jobs/{job_id}/audio")

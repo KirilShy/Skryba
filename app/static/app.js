@@ -8,6 +8,8 @@ const state = {
   active: null,       // full job with segments
   liveSegments: [],   // segments streamed while a job is still running
   tab: 'transcript',
+  chats: {},          // questions asked per recording, kept for this session
+  asking: false,
   source: null,       // EventSource for the active job
   model: 'turbo',
   search: '',         // filters the recordings list, by filename or transcript text
@@ -64,7 +66,7 @@ async function loadCaps() {
   wireOptional('diarize', state.caps.diarization,
     'Requires pyannote + HF_TOKEN — see the README');
   wireOptional('summary', state.caps.summarization,
-    'Set OPENROUTER_API_KEY or ANTHROPIC_API_KEY to enable');
+    'Needs a local model (Ollama, LM Studio) or an API key');
   if (state.caps.summarization && state.caps.summary_provider) {
     $('summary-hint').textContent = state.caps.summary_provider;
   }
@@ -422,6 +424,9 @@ function renderDetail() {
   if (!hasSummary && state.tab === 'summary' && !done) state.tab = 'transcript';
   $('tab-summary').onclick = () => { state.tab = 'summary'; renderTabs(); renderContent(); };
   $('tab-transcript').onclick = () => { state.tab = 'transcript'; renderTabs(); renderContent(); };
+  $('tab-ask').onclick = () => { state.tab = 'ask'; renderTabs(); renderContent(); };
+  $('tab-ask').style.display = (job.segments?.length && job.status !== 'running') ? '' : 'none';
+  if (state.tab === 'ask' && $('tab-ask').style.display === 'none') state.tab = 'transcript';
   renderTabs();
   renderContent();
 }
@@ -443,6 +448,7 @@ function renderSub() {
 function renderTabs() {
   $('tab-summary').setAttribute('aria-selected', String(state.tab === 'summary'));
   $('tab-transcript').setAttribute('aria-selected', String(state.tab === 'transcript'));
+  $('tab-ask').setAttribute('aria-selected', String(state.tab === 'ask'));
 }
 
 function renderContent() {
@@ -463,6 +469,8 @@ function renderContent() {
 
   if (state.tab === 'summary') {
     out.push(renderSummary(job));
+  } else if (state.tab === 'ask') {
+    out.push(renderAsk(job));
   } else {
     // Persisted segments and the live stream have to be MERGED, not chosen
     // between: once the first chunk lands, job.segments is non-empty, and
@@ -504,18 +512,138 @@ function renderContent() {
   };
   const btn = $('run-summary');
   if (btn) btn.onclick = runSummary;
+  const form = $('ask-form');
+  if (form) {
+    form.onsubmit = (e) => { e.preventDefault(); askQuestion(); };
+    if (!state.asking) $('ask-input').focus();
+  }
+}
+
+/* ---------------- ask ---------------- */
+
+// "[12:34]" or "[1:02:03]" in an answer becomes a button that seeks the audio,
+// so every claim the model makes can be checked against what was said.
+function linkTimes(text) {
+  return esc(text).replace(/\[(\d{1,2}(?::\d{2}){1,2})\]/g, (whole, stamp) => {
+    const secs = stamp.split(':').reduce((acc, part) => acc * 60 + Number(part), 0);
+    return `<button class="stamp cite" data-t="${secs}">${stamp}</button>`;
+  });
+}
+
+function renderAnswer(item) {
+  if (item.error) return `<div class="notice err">${esc(item.error)}</div>`;
+  const body = item.answer
+    ? linkTimes(item.answer).replace(/\n/g, '<br>')
+    : '<span class="spinner"></span> <span style="color:var(--text-dim)">Reading the transcript…</span>';
+  const src = item.sources?.length
+    ? `<details class="ask-sources"><summary>Based on ${item.sources.length} part${item.sources.length === 1 ? '' : 's'} of the meeting</summary>
+        ${item.sources.map((x) => `<div><button class="stamp" data-t="${x.start}">${esc(x.clock)}</button>
+          ${esc(x.text)}${x.text.length >= 220 ? '…' : ''}</div>`).join('')}</details>`
+    : '';
+  return `<div class="ask-a">${body}</div>${src}`;
+}
+
+function renderAsk(job) {
+  if (!state.caps?.ask) {
+    return `<div class="ask-setup">
+      <p><strong>Ask questions about this meeting</strong> — answered by a model
+      running on your own computer, so the transcript stays private.</p>
+      <p>No local model is running right now (${esc(state.caps?.local_model || 'none found')}).
+      To turn this on:</p>
+      <ol>
+        <li>Install <a href="https://ollama.com" target="_blank" rel="noopener">Ollama</a>
+            or LM Studio on this computer.</li>
+        <li>Load a model, for example: <code>ollama pull qwen2.5:3b</code></li>
+        <li>Reload this page.</li>
+      </ol>
+      <p style="color:var(--text-dim)">Already have a model on another computer? Set
+      <code>LOCAL_LLM_URL</code> in <code>.env</code> to its address.</p></div>`;
+  }
+  const chat = state.chats[job.id] || [];
+  const history = chat.map((item, i) => `<div class="ask-item">
+      <div class="ask-q">${esc(item.question)}</div>
+      <div id="ask-a-${i}">${renderAnswer(item)}</div></div>`).join('');
+  const hint = chat.length ? '' : `<p class="ask-hint">Ask anything about this recording —
+    who agreed to what, what was said about a topic, what is still open. Answers
+    come from <strong>${esc(state.caps.local_model)}</strong> and link to the moment they were said.</p>`;
+  return `<div class="ask">${hint}${history}
+    <form id="ask-form" class="ask-form">
+      <input id="ask-input" type="text" autocomplete="off" maxlength="1000"
+             placeholder="Ask about this meeting…" ${state.asking ? 'disabled' : ''}>
+      <button class="btn" type="submit" ${state.asking ? 'disabled' : ''}>Ask</button>
+    </form></div>`;
+}
+
+// Read a response that sends one JSON object per line as they become ready.
+async function readLines(res, onItem) {
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let nl;
+    while ((nl = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, nl).trim();
+      buffer = buffer.slice(nl + 1);
+      if (line) onItem(JSON.parse(line));
+    }
+  }
+  if (buffer.trim()) onItem(JSON.parse(buffer));
+}
+
+async function askQuestion() {
+  const input = $('ask-input');
+  const question = input.value.trim();
+  if (!question || state.asking) return;
+  const jobId = state.activeId;
+  const chat = (state.chats[jobId] = state.chats[jobId] || []);
+  const item = { question, answer: '', sources: [], error: null };
+  chat.push(item);
+  state.asking = true;
+  renderContent();
+
+  // While the answer streams in, touch only its own element: re-rendering the
+  // whole tab on every word would make the page jump.
+  const paint = () => {
+    if (state.activeId !== jobId || state.tab !== 'ask') return;
+    const el = $(`ask-a-${chat.length - 1}`);
+    if (el) el.innerHTML = renderAnswer(item);
+  };
+  try {
+    const res = await fetch(`/api/jobs/${jobId}/ask`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question }),
+    });
+    if (!res.ok) throw new Error((await res.json()).detail || 'Failed');
+    await readLines(res, (msg) => {
+      if (msg.sources) item.sources = msg.sources;
+      if (msg.delta) item.answer += msg.delta;
+      if (msg.error) item.error = msg.error;
+      paint();
+    });
+    if (!item.answer && !item.error) item.error = 'The model returned nothing.';
+  } catch (err) {
+    item.error = err.message;
+  }
+  state.asking = false;
+  if (state.activeId === jobId && state.tab === 'ask') renderContent();
 }
 
 function renderSummary(job) {
   if (!job.summary) {
     if (job.status !== 'done') return '<p style="color:var(--text-dim)">Not available yet.</p>';
     if (!state.caps?.summarization) {
-      return `<p style="color:var(--text-dim)">No summary. Set
-        <code>ANTHROPIC_API_KEY</code> in <code>.env</code> and restart to enable this.</p>`;
+      return `<p style="color:var(--text-dim)">No summary yet. Start a local model
+        (Ollama or LM Studio) and reload, or add an API key to <code>.env</code>.
+        The Ask tab has setup steps.</p>`;
     }
     return `<p style="color:var(--text-dim);margin-bottom:14px">
       No summary was generated for this recording.</p>
-      <button class="btn" id="run-summary">Summarize with Claude</button>`;
+      <button class="btn" id="run-summary">Summarize</button>
+      <span style="color:var(--text-dim);font-size:13px;margin-left:8px">${esc(state.caps.summary_provider || '')}</span>`;
   }
   const s = job.summary;
   const parts = [];
@@ -746,15 +874,28 @@ async function runSummary() {
   btn.disabled = true;
   btn.textContent = 'Summarizing…';
   try {
-    const res = await fetch(`/api/jobs/${state.activeId}/summarize`, { method: 'POST' });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || 'Failed');
-    state.active.summary = data.summary;
-    delete state.active.meta.summary_error;
-    renderContent();
+    const jobId = state.activeId;
+    const res = await fetch(`/api/jobs/${jobId}/summarize`, { method: 'POST' });
+    if (!res.ok) throw new Error((await res.json()).detail || 'Failed');
+    let summary = null, failure = null;
+    await readLines(res, (msg) => {
+      if (msg.total) {
+        const live = $('run-summary');
+        if (live) live.textContent = `Summarizing… part ${Math.min(msg.done + 1, msg.total)} of ${msg.total}`;
+      }
+      if (msg.summary) summary = msg.summary;
+      if (msg.error) failure = msg.error;
+    });
+    if (failure) throw new Error(failure);
+    if (!summary) throw new Error('No summary came back.');
+    if (state.activeId === jobId) {
+      state.active.summary = summary;
+      delete state.active.meta.summary_error;
+      renderContent();
+    }
   } catch (err) {
-    btn.disabled = false;
-    btn.textContent = 'Summarize with Claude';
+    const live = $('run-summary');
+    if (live) { live.disabled = false; live.textContent = 'Summarize'; }
     alert(err.message);
   }
 }

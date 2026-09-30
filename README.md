@@ -151,6 +151,42 @@ of lines are flagged, so the page stays readable.
 Transcripts made before this feature still get the invented-line checks;
 doubtful-word marks need a fresh transcription.
 
+## Summaries and questions, with a model on your own machine
+
+Skryba can summarize a meeting and answer questions about it using a language
+model running locally, so the transcript never leaves the computer and there
+is no API bill. Skryba does not download a model itself. It looks for a model
+server already running and uses what is loaded there:
+
+| Server | Default address | Detected automatically |
+| --- | --- | --- |
+| [Ollama](https://ollama.com) | `http://127.0.0.1:11434` | yes |
+| LM Studio | `http://127.0.0.1:1234` | yes |
+| llama.cpp server | `http://127.0.0.1:8080` | yes |
+| Jan | `http://127.0.0.1:1337` | yes |
+
+With Ollama, for example:
+
+```bash
+ollama pull qwen2.5:3b
+```
+
+Reload Skryba and the **AI summary** toggle and the **Ask** tab switch on.
+
+- **Summary** reads a long meeting a piece at a time, takes notes on each, then
+  combines the notes. A small model with a small context window still covers
+  the whole recording, and the button shows which part it is on.
+- **Ask** finds the parts of the transcript that mention your question's words,
+  and the model answers from those alone. Each fact links to the moment it was
+  said; click a time to hear it.
+
+To use a model on another computer on your network, set `LOCAL_LLM_URL` in
+`.env` to its address (for Ollama, start it there with `OLLAMA_HOST=0.0.0.0`).
+That does send the transcript to that computer.
+
+A 3B model is enough for summaries and simple questions. Expect it to miss
+detail on a messy recording; a 7B or larger model is noticeably better.
+
 ## Optional features
 
 Copy `.env.example` to `.env` and fill in what you want. Toggles for features

@@ -3,7 +3,9 @@ import os
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = BASE_DIR / "data"
+# Where recordings and transcripts live. Override to keep them elsewhere, or to
+# run a second copy of the app against scratch data.
+DATA_DIR = Path(os.environ.get("SKRYBA_DATA_DIR") or BASE_DIR / "data")
 UPLOAD_DIR = DATA_DIR / "uploads"
 JOB_DIR = DATA_DIR / "jobs"
 
@@ -48,8 +50,22 @@ ALLOWED_SUFFIXES = {
 EXPORT_DIR = Path(os.environ.get("EXPORT_DIR", BASE_DIR.parent / "transcripts"))
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
-# Summary provider. "auto" prefers OpenRouter when its key is present, then the
-# Anthropic API. Set explicitly to "anthropic" or "openrouter" to force one.
+# A model running on this machine, used for summaries and for asking questions
+# about a meeting. Left blank, Skryba looks for Ollama, LM Studio, llama.cpp or
+# Jan on their default ports. Point LOCAL_LLM_URL at another computer on your
+# network to borrow its model, e.g. http://192.168.1.20:11434
+LOCAL_LLM_URL = os.environ.get("LOCAL_LLM_URL", "").strip()
+LOCAL_LLM_MODEL = os.environ.get("LOCAL_LLM_MODEL", "").strip()
+# Tokens of context to request (Ollama only; others use the loaded model's own).
+LOCAL_LLM_CONTEXT = int(os.environ.get("LOCAL_LLM_CONTEXT", "8192"))
+LOCAL_LLM_TIMEOUT = float(os.environ.get("LOCAL_LLM_TIMEOUT", "600"))
+# A long meeting is summarised in pieces this big, then the pieces combined, so
+# a small model with a small window still covers the whole recording.
+LOCAL_LLM_CHUNK_CHARS = int(os.environ.get("LOCAL_LLM_CHUNK_CHARS", "6000"))
+
+# Summary provider. "auto" prefers a local model (private and free), then
+# OpenRouter, then the Anthropic API. Set to "local", "openrouter" or
+# "anthropic" to force one.
 SUMMARY_PROVIDER = os.environ.get("SUMMARY_PROVIDER", "auto").strip().lower()
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 OPENROUTER_BASE_URL = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
